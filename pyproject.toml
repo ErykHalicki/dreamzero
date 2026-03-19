@@ -83,6 +83,7 @@ dependencies = [
     "deepspeed",
     "tiktoken",
     "sentencepiece"
+    #"lerobot==0.3.2" This is the version needed to have a v2.0 dataset i think
 ]
 
 [project.optional-dependencies]
