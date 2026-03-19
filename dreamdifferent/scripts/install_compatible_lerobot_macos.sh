@@ -2,7 +2,7 @@
 set -e
 
 COMMIT="32eb0cec8f322a7d93a1ec2008dd1a11ae6286b3"
-CLONE_DIR="/tmp/lerobot_032"
+CLONE_DIR="/tmp/lerobot_patched"
 
 if [ -d "$CLONE_DIR" ]; then
     echo "Removing existing $CLONE_DIR"
