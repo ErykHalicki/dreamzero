@@ -2,11 +2,11 @@ import h5py
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 
-H5_PATH = "data/egoverse_test_data.h5"
+H5_PATH = "data/object_in_bowl_data.h5"
 
 f = h5py.File(H5_PATH, "r")
 dataset = f["observations/images/aria_rgb_cam/color"]
-start_frame = 2500
+start_frame = 0
 total = dataset.shape[0] - start_frame
 
 fig, ax = plt.subplots()
