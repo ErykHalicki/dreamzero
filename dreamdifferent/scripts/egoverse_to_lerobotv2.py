@@ -28,10 +28,10 @@ H5 structure:
 import argparse
 import json
 from pathlib import Path
+import subprocess
 
 import h5py
 import numpy as np
-from PIL import Image
 from lerobot.common.datasets.lerobot_dataset import LeRobotDataset
 from tqdm import tqdm
 
@@ -137,8 +137,28 @@ def generate_modality_json(meta_path: Path, task_type: str) -> None:
     print(f"Written {out}")
 
 
+def encode_video(h5_cam_dataset, fps: float, output_path: Path) -> None:
+    """Pipe raw RGB frames from h5 directly to ffmpeg — no intermediate JPEG files."""
+    n, h, w, _ = h5_cam_dataset.shape
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        "ffmpeg", "-y", "-loglevel", "error",
+        "-f", "rawvideo", "-vcodec", "rawvideo",
+        "-s", f"{w}x{h}", "-pix_fmt", "rgb24", "-r", str(fps), "-i", "pipe:0",
+        "-vcodec", "libx264", "-crf", "18", "-pix_fmt", "yuv420p",
+        str(output_path),
+    ]
+    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
+    proc.stdin.write(h5_cam_dataset[:].tobytes())
+    proc.stdin.close()
+    proc.wait()
+    if proc.returncode != 0:
+        raise RuntimeError(f"ffmpeg encoding failed for {output_path}")
+
+
 def convert_episode(h5_path: Path, task_type: str, dataset: LeRobotDataset) -> None:
     cfg = TASK_CONFIGS[task_type]
+    episode_index = dataset.meta.total_episodes
 
     with h5py.File(h5_path, "r") as f:
         if task_type == "bag_groceries":
@@ -164,22 +184,15 @@ def convert_episode(h5_path: Path, task_type: str, dataset: LeRobotDataset) -> N
                 f["actions_hand"][:],
             ]).astype(np.float32)
 
-        n_frames = len(state)
-        images = {
-            cam_key: f[cam_cfg["h5_key"]][:]
-            for cam_key, cam_cfg in cfg["cameras"].items()
-        }
+        for cam_key, cam_cfg in cfg["cameras"].items():
+            video_path = dataset.root / dataset.meta.get_video_file_path(episode_index, cam_key)
+            print(f"  Encoding {cam_key}...")
+            encode_video(f[cam_cfg["h5_key"]], cfg["fps"], video_path)
 
-        for i in tqdm(range(n_frames), desc=f"  {h5_path.name}", leave=False):
-            frame = {
-                "observation.state": state[i],
-                "action": action[i],
-            }
-            for cam_key, imgs in images.items():
-                frame[cam_key] = Image.fromarray(imgs[i])
-            dataset.add_frame(frame)
+    for i in tqdm(range(len(state)), desc=f"  {h5_path.name}", leave=False):
+        dataset.add_frame({"observation.state": state[i], "action": action[i]})
 
-    dataset.save_episode(task=cfg["task_instruction"])
+    dataset.save_episode(task=cfg["task_instruction"], encode_videos=False)
 
 
 MANIFEST_FILE = "processed_episodes.json"
