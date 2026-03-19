@@ -28,21 +28,30 @@ LeRobotDataset was updated to v2.0 at `huggingface/lerobot/commit/32eb0cec8f322a
 The `lerobot.common.datasets.lerobot_dataset` import at the top of `dreamzero/scripts/data/convert_agibot.py` confirms this, since the lerobot.common.datasets directory got renamed to lerobot.datasets before v0.3.2 
 
 One small problem, there is no LeRobot version < 0.3.2 published to pip anymore, so we need to manually install the lerobot repo at that specific commit hash :D
-Run `pip install git+https://github.com/huggingface/lerobot.git@32eb0cec8f322a7d93a1ec2008dd1a11ae6286b3` to install a version compatible with the dreamzero codebase
+
+Due to some dependency weirdness, directly installing from github doesnt work, so I've added the scipt `dreamdifferent/scripts/install_compatible_lerobot_linux.sh` (and macos version for local testing).
 
 ### How to convert from Egoverse .h5 to lerobot v2.0?
 Would it make sense to update the dreamzero repo to just use LeRobotDataset v3.0? 
 Probably not, the repo does not seem well organized, so the refactor would probably take a 5+ hours
 
-Referencing: [LeRobotDataset Github](https://github.com/huggingface/lerobot/blob/32eb0cec8f322a7d93a1ec2008dd1a11ae6286b3/lerobot/common/datasets/lerobot_dataset.py)
-
-
 `dreamzero/scripts/data/convert_droid.py` and `dreamzero/scripts/data/convert_agibot.py` are some examples of dataset conversions to lerobot v2.0
 
-`dreamzero/scripts/data/convert_agibot.py` is especially promising, since it converts from h5 to lerobot v2.0
- 
-We can use `LeRobotDataset.create()` to make an empty dataset which we can directly write into
+Referencing [LeRobotDataset Github](https://github.com/huggingface/lerobot/blob/32eb0cec8f322a7d93a1ec2008dd1a11ae6286b3/lerobot/common/datasets/lerobot_dataset.py) and `dreamzero/scripts/data/convert_agibot.py` (which also does h5 -> lerobot)
 
+#### scripts/egoverse_to_lerobotv2.py
+We use `LeRobotDataset.create()` to make an empty dataset object which we can directly write into.
+Then using `dataset.add_frame`, `dataset.save_episode`, and `dataset.consolidate`, we append observations and actions from the h5 into the LeRobotDataset object, which are automatically saved to disk.
+
+Since the images are compressed into .mp4 format, the resulting lerobot dataset is MUCH smaller than the original h5 file (~50x smaller)
+
+### Batching the lerobot conversion script on Euler
+Using [Euler HPC Docs](https://docs.hpc.ethz.ch/batchsystem/slurm/) as reference
+
+Using slurm is simpler than I expected. `srun` runs commands direclty, and `sbatch` runs batch scripts.
+`dreamdifferent/scripts/convert_full_dataset.bash` will convert the entire egoverse dataset on euler
+
+I think then I'll rsync the dataset to the D-INFK student cluster since the resulting dataset will be smaller than the raw data
 
 ## Conversion to gear format
 Follow `dreamzero/docs/DATASET_TO_GEAR_AND_TRAIN.md`
