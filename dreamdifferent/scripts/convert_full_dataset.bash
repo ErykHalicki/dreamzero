@@ -2,7 +2,7 @@
 
 #SBATCH --time=10:00:00
 #SBATCH --cpus-per-task=4
-#SBATCH --mem-per-cpu=2048MB
+#SBATCH --mem-per-cpu=16GB
 #SBATCH --output=convert_dataset.out
 
 module load eth_proxy #need to load this to access anything outside the ETH network on a cluster node
