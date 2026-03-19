@@ -9,6 +9,8 @@ module load eth_proxy #need to load this to access anything outside the ETH netw
 cd ~
 source .venv/bin/activate
 cd dreamzero
+
+rm -r /cluster/scratch/ehalicki/egoverse/bag_groceries/images #clear the images directory in case the last run didnt shut down gracefully
 python dreamdifferent/scripts/egoverse_to_lerobotv2.py \
     --src_dir /cluster/work/cvg/data/Egoverse/raw_timesynced_h5/bag_groceries/ \
     --tgt_path /cluster/scratch/ehalicki \

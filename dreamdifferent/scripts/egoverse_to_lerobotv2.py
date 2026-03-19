@@ -165,13 +165,18 @@ def convert_episode(h5_path: Path, task_type: str, dataset: LeRobotDataset) -> N
             ]).astype(np.float32)
 
         n_frames = len(state)
+        images = {
+            cam_key: f[cam_cfg["h5_key"]][:]
+            for cam_key, cam_cfg in cfg["cameras"].items()
+        }
+
         for i in tqdm(range(n_frames), desc=f"  {h5_path.name}", leave=False):
             frame = {
                 "observation.state": state[i],
                 "action": action[i],
             }
-            for cam_key, cam_cfg in cfg["cameras"].items():
-                frame[cam_key] = Image.fromarray(f[cam_cfg["h5_key"]][i])
+            for cam_key, imgs in images.items():
+                frame[cam_key] = Image.fromarray(imgs[i])
             dataset.add_frame(frame)
 
     dataset.save_episode(task=cfg["task_instruction"])
