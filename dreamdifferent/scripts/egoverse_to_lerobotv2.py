@@ -33,7 +33,12 @@ import subprocess
 import h5py
 import numpy as np
 from lerobot.common.datasets.lerobot_dataset import LeRobotDataset
+import lerobot.common.datasets.lerobot_dataset as _lrd
 from tqdm import tqdm
+
+# lerobot bug: check_timestamps_sync calls torch.stack on an Arrow Column instead of tensors
+# (see TODO comment in load_hf_dataset). It's validation-only so safe to skip.
+_lrd.check_timestamps_sync = lambda *a, **kw: True
 
 
 TASK_CONFIGS = {
