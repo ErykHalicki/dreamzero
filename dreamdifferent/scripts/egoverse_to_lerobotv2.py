@@ -236,7 +236,6 @@ def main():
         h5_files = h5_files[:2]
     if not h5_files:
         print("All episodes already processed. Nothing to do.")
-        return
     print(f"Found {len(h5_files)} new episode file(s) for '{args.task_type}' "
           f"({len(already_processed)} already processed)")
 
