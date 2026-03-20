@@ -43,15 +43,22 @@ Referencing [LeRobotDataset Github](https://github.com/huggingface/lerobot/blob/
 We use `LeRobotDataset.create()` to make an empty dataset object which we can directly write into.
 Then using `dataset.add_frame`, `dataset.save_episode`, and `dataset.consolidate`, we append observations and actions from the h5 into the LeRobotDataset object, which are automatically saved to disk.
 
-Since the images are compressed into .mp4 format, the resulting lerobot dataset is MUCH smaller than the original h5 file (~50x smaller)
+Since the images are compressed into .mp4 format, the resulting lerobot dataset is MUCH smaller than the original h5 file (1.8TB -> 7GB)
+
+
+Also, the default lerobot method of writing pngs and then combining them into a single mp4 afterwards was significantly slowing down dataset conversion due to disk write bottlenecks
+To speed things up, I avoided the png writing process entirely and just piped image data directly into an ffmpeg subprocess, keeping everything in memory. This changed the dataset conversion time from ~100 hours for 3 episodes to ~5 hours without any major parallelization
 
 ### Batching the lerobot conversion script on Euler
 Using [Euler HPC Docs](https://docs.hpc.ethz.ch/batchsystem/slurm/) as reference
 
-Using slurm is simpler than I expected. `srun` runs commands direclty, and `sbatch` runs batch scripts.
-`dreamdifferent/scripts/convert_full_dataset.bash` will convert the entire egoverse dataset on euler
+Using slurm was simpler than I expected. `srun` runs commands direclty, and `sbatch` runs batch scripts.
+run `sbatch dreamzero/dreamdifferent/scripts/convert_full_dataset.bash` to convert the entire egoverse dataset on euler
 
-I think then I'll rsync the dataset to the D-INFK student cluster since the resulting dataset will be smaller than the raw data
+Then I rsynced the dataset to the D-INFK student cluster, specifically `/work/courses/3dv/team21/datasets`
+`rsync -av --progress /cluster/scratch/ehalicki/egoverse/ ehalicki@student-cluster.inf.ethz.ch://work/courses/3dv/team21/datasets/`
+
+As of March 20, 2026, I've only converted the grocery bagging dataset, since it uses our target bimanual embodiment.
 
 ## Conversion to gear format
 Follow `dreamzero/docs/DATASET_TO_GEAR_AND_TRAIN.md`
