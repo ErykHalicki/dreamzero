@@ -1,23 +1,26 @@
 import h5py
 import matplotlib.pyplot as plt
-import numpy as np
+import matplotlib.animation as animation
 
-H5_PATH = "data/test_data.h5"
-NUM_IMAGES = 6
+H5_PATH = "data/object_in_bowl_data.h5"
 
-with h5py.File(H5_PATH, "r") as f:
-    images = f["observations/images/aria_rgb_cam/color"]
-    total = images.shape[0]
-    indices = np.linspace(0, total - 1, NUM_IMAGES, dtype=int)
-    frames = images[indices]
+f = h5py.File(H5_PATH, "r")
+dataset = f["observations/images/aria_rgb_cam/color"]
+start_frame = 0
+total = dataset.shape[0] - start_frame
 
-fig, axes = plt.subplots(2, 3, figsize=(14, 8))
-for ax, img, idx in zip(axes.flat, frames, indices):
-    ax.imshow(img)
-    ax.set_title(f"Frame {idx}")
-    ax.axis("off")
+fig, ax = plt.subplots()
+im = ax.imshow(dataset[start_frame])
+ax.axis("off")
+#title = ax.set_title("Frame 0")
 
+def update(i):
+    im.set_data(dataset[i+start_frame])
+    #title.set_text(f"Frame {i}")
+    return [im]
+
+ani = animation.FuncAnimation(fig, update, frames=total, interval=1, blit=True)
 plt.tight_layout()
-plt.savefig("data/sample_frames.png", dpi=150)
 plt.show()
-print(f"Saved sample_frames.png — {NUM_IMAGES} frames from {total} total")
+f.close()
+print(f"Played {total} frames")
