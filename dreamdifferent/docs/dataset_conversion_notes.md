@@ -63,3 +63,7 @@ As of March 20, 2026, I've only converted the grocery bagging dataset, since it 
 ## Conversion to gear format
 Follow `dreamzero/docs/DATASET_TO_GEAR_AND_TRAIN.md`
 
+Got up to step 5 completed, but untested. I've inspected the outputs of the conversion script and it seems to work correctly, but we wont know until we try training.
+Next step is to try running the training script at `dreamdifferent/scripts/franka_training.sh`
+
+The repo uses Deepseed, so we can try using the ZeRO-3 config provided and modify as needed `/dreamzero/groot/vla/configs/deepspeed/zero3.json`
