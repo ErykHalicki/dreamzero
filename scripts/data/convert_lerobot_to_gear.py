@@ -49,7 +49,7 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 log = logging.getLogger(__name__)
 
 VALID_EMBODIMENT_TAGS = [
-    "real_gr1_arms_only", "real_gr1_arms_only_annotated",
+    "franka","real_gr1_arms_only", "real_gr1_arms_only_annotated",
     "real_gr1_arms_waist", "real_gr1_arms_waist_annotated",
     "dexmg_gr1_arms_only_inspire", "dexmg_gr1_arms_only_fourier",
     "dexmg_gr1_arms_waist_fourier",
