@@ -59,13 +59,11 @@ fi
 # Environment
 # --------------------------------------------------------------------------- #
 export CUDA_VISIBLE_DEVICES="$CUDA_DEVICE"
-# PyTorch native SDPA — FlashAttention/Transformer Engine may not support
-# the GB10's compute capability 12.1
 export ATTENTION_BACKEND="torch"
 export HYDRA_FULL_ERROR=1
-# Triton's bundled ptxas does not recognise sm_121a (GB10, CUDA capability 12.1)
-# so torch.compile fails. Disable it and fall back to eager execution.
-export TORCHDYNAMO_DISABLE=1
+# Triton's bundled ptxas does not recognise sm_121a (GB10, CUDA 12.1).
+# Use the system ptxas (CUDA 13.0) which supports sm_121a.
+export TRITON_PTXAS_PATH=$(which ptxas)
 # Prevent ld.so TLS assertion crash on ARM64 (GB10) caused by conflicting
 # OpenMP runtimes (libgomp vs libiomp5) loaded by conda packages.
 export KMP_DUPLICATE_LIB_OK=TRUE
