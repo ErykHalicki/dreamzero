@@ -497,7 +497,7 @@ class VLA(PreTrainedModel):
 
     @classmethod
     def from_pretrained(
-        cls, 
+        cls,
         pretrained_model_name_or_path: str,
         config: VLAConfig = None
     ):
@@ -506,38 +506,32 @@ class VLA(PreTrainedModel):
         from safetensors.torch import load_file
         import os
         import json
+        import torch
+        import psutil
+
+        def _log_mem(label: str) -> None:
+            mem = psutil.Process().memory_info()
+            sys_mem = psutil.virtual_memory()
+            print(f"[MEM {label}] RSS={mem.rss / 1e9:.1f}GB  "
+                  f"System: used={sys_mem.used / 1e9:.1f}GB / "
+                  f"total={sys_mem.total / 1e9:.1f}GB  "
+                  f"avail={sys_mem.available / 1e9:.1f}GB", flush=True)
+
+        _log_mem("start")
         print("loading pretrained@@@@@")
         # Check for different checkpoint formats
         safetensors_path = os.path.join(pretrained_model_name_or_path, "model.safetensors")
         safetensors_index_path = os.path.join(pretrained_model_name_or_path, "model.safetensors.index.json")
 
-        state_dict = {}
-        if os.path.exists(safetensors_index_path):
-            # Handle sharded safetensors
-            print(f"Loading sharded safetensors using index: {safetensors_index_path}")
-            
-            with open(safetensors_index_path, 'r') as f:
-                index = json.load(f)
-            
-            # Load each shard
-            for shard_file in set(index["weight_map"].values()):
-                shard_path = os.path.join(pretrained_model_name_or_path, shard_file)
-                print(f"Loading shard: {shard_path}")
-                shard_state_dict = load_file(shard_path)
-                state_dict.update(shard_state_dict)
-                
-        elif os.path.exists(safetensors_path):
-            # Handle single safetensors file
-            print(f"Loading weights from safetensors: {safetensors_path}")
-            state_dict.update(load_file(safetensors_path))
-        
-        # Load config
+        # Load config first so the model can be instantiated and cast to the
+        # stored weight dtype BEFORE the full state_dict is loaded into RAM.
+        # This avoids the float32 peak (model ~85 GB) + bfloat16 state_dict
+        # (~43 GB) = ~128 GB that triggers the Linux OOM killer on 128 GB systems.
         print("loading config@@")
         config_path = os.path.join(pretrained_model_name_or_path, "config.json")
         with open(config_path, "r") as f:
             config_dict = json.load(f)
         config = VLAConfig(**config_dict)
-        print("loading model")
         print("config.action_head_cfg", config.action_head_cfg)
         # Always disable defer_lora_injection
         # config.action_head_cfg is a dict, and defer_lora_injection is nested in config.action_head_cfg['config']
@@ -549,28 +543,66 @@ class VLA(PreTrainedModel):
             config.action_head_cfg['defer_lora_injection'] = False
             print("config.action_head_cfg['defer_lora_injection'] disabled (set to False)")
 
-        # Instantiate model
-        model = cls(config)
-        print("model", model)
-        # Remove .base_layer from keys (e.g., 'action_head.model.base_model.model.blocks.19.self_attn.v.base_layer.bias' -> 'action_head.model.base_model.model.blocks.19.self_attn.v.bias')
-        has_base_layer = any(".base_layer." in key for key in state_dict.keys())
-        if has_base_layer:
-            print("Removing '.base_layer' from state dict keys")
-            new_state_dict = {}
-            for k, v in state_dict.items():
-                new_k = k.replace(".base_layer.", ".")
-                new_state_dict[new_k] = v
-            state_dict = new_state_dict
+        # Skip loading individual component weights (T5/CLIP/VAE/DiT) inside
+        # WANPolicyHead.__init__: from_pretrained will overwrite them with the
+        # full checkpoint weights anyway.  Without this flag the DiT loads all
+        # shards into one dict simultaneously, causing a ~56 GB RAM spike that
+        # kills the process on 128 GB unified-memory machines (GB10 DGX Spark).
+        if 'config' in config.action_head_cfg and isinstance(config.action_head_cfg['config'], dict):
+            config.action_head_cfg['config']['skip_component_loading'] = True
+            print("skip_component_loading set to True (component weights will be loaded from checkpoint)")
 
-        missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=False)
-            
-        if missing_keys:
-            print(f"Missing keys when loading pretrained weights: {missing_keys}")
-        if unexpected_keys:
-            print(f"Unexpected keys when loading pretrained weights: {unexpected_keys}")
-        
+        # Instantiate model in bfloat16 (~42 GB) then load weights one shard
+        # at a time (~4.3 GB each).  Peak RAM ≈ 42 + 4.3 ≈ 46 GB.
+        _log_mem("before model init")
+        print("loading model")
+        import gc
+        original_dtype = torch.get_default_dtype()
+        torch.set_default_dtype(torch.bfloat16)
+        try:
+            model = cls(config)
+        finally:
+            torch.set_default_dtype(original_dtype)
+        gc.collect()
+        _log_mem("after model init")
+
+        # Build a mapping from parameter name -> parameter object for direct
+        # in-place copy, avoiding load_state_dict's overhead and extra memory.
+        param_dict = dict(model.named_parameters())
+        buf_dict = dict(model.named_buffers())
+
+        def _apply_shard(shard: dict) -> None:
+            for k, v in shard.items():
+                k_clean = k.replace(".base_layer.", ".")
+                target = param_dict.get(k_clean)
+                if target is None:
+                    target = buf_dict.get(k_clean)
+                if target is not None:
+                    with torch.no_grad():
+                        target.copy_(v.to(dtype=target.dtype))
+
+        if os.path.exists(safetensors_index_path):
+            print(f"Loading sharded safetensors using index: {safetensors_index_path}")
+            with open(safetensors_index_path, 'r') as f:
+                index = json.load(f)
+
+            for shard_file in sorted(set(index["weight_map"].values())):
+                shard_path = os.path.join(pretrained_model_name_or_path, shard_file)
+                print(f"Loading shard: {shard_path}")
+                shard_data = load_file(shard_path)
+                _apply_shard(shard_data)
+                del shard_data
+                gc.collect()
+                _log_mem(f"after {shard_file}")
+
+        elif os.path.exists(safetensors_path):
+            print(f"Loading weights from safetensors: {safetensors_path}")
+            shard_data = load_file(safetensors_path)
+            _apply_shard(shard_data)
+            del shard_data
+            gc.collect()
+
         print("Successfully loaded pretrained weights")
-
         print(f"{cls}\n")
         return model
 
