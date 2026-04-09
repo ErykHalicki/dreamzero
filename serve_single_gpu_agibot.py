@@ -85,6 +85,22 @@ def _init_single_gpu() -> None:
     torch.cuda.set_device(0)
 
 
+def _get_policy_input_resolution(policy: GrootSimPolicy) -> tuple[int, int] | None:
+    """Return the raw video input resolution expected by the policy as (H, W)."""
+    eval_transform = getattr(policy, "eval_transform", None)
+    transforms = getattr(eval_transform, "transforms", []) if eval_transform is not None else []
+    for transform in transforms:
+        original_resolutions = getattr(transform, "original_resolutions", None)
+        if not original_resolutions:
+            continue
+        first_resolution = next(iter(original_resolutions.values()), None)
+        if first_resolution is None:
+            continue
+        width, height = first_resolution
+        return int(height), int(width)
+    return None
+
+
 # Action keys in the order they are concatenated in the output array.
 # Dimensions: left_arm(7), right_arm(7), left_effector(1), right_effector(1),
 #             head(2), waist(2), robot_velocity(2) = 22 total.
@@ -310,8 +326,11 @@ def main(args: Args) -> None:
 
     wrapper_policy = SingleGPUAgibotPolicy(groot_policy=policy, output_dir=output_dir)
 
+    input_resolution = _get_policy_input_resolution(policy)
+    logger.info("DreamZero AgiBot raw input resolution: %s", input_resolution)
+
     server_config = PolicyServerConfig(
-        image_resolution=(180, 320),
+        image_resolution=input_resolution,
         needs_wrist_camera=True,   # top_head camera
         n_external_cameras=2,      # hand_left, hand_right
         needs_stereo_camera=False,
