@@ -208,7 +208,8 @@ class SingleGPUAgibotPolicy:
             if val.ndim == 3:
                 val = val.squeeze(0)   # (1, T, dim) -> (T, dim)
             elif val.ndim == 1:
-                val = val.reshape(1, -1)
+                # Scalar horizons arrive as (T,), so keep time on axis 0.
+                val = val.reshape(-1, 1)
             elif val.ndim == 0:
                 val = val.reshape(1, 1)
             debug_shapes.append(f"{key}: raw={raw_shape} normalized={tuple(val.shape)}")
