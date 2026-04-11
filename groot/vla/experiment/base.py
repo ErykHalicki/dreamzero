@@ -716,11 +716,23 @@ class BaseExperiment(ABC):
                     shard_path = os.path.join(ckpt_dir, shard_file)
                     mprint(f"Loading shard: {shard_path}")
                     shard_state_dict = load_file(shard_path)
+                    # Filter out keys with shape mismatches (e.g. action_dim changed)
+                    model_state = model.state_dict()
+                    shard_state_dict = {
+                        k: v for k, v in shard_state_dict.items()
+                        if k not in model_state or model_state[k].shape == v.shape
+                    }
                     model.load_state_dict(shard_state_dict, strict=False)
                     del shard_state_dict
                     gc.collect()
             elif os.path.exists(safetensors_path):
                 state_dict = load_file(safetensors_path)
+                # Filter out keys with shape mismatches (e.g. action_dim changed)
+                model_state = model.state_dict()
+                state_dict = {
+                    k: v for k, v in state_dict.items()
+                    if k not in model_state or model_state[k].shape == v.shape
+                }
                 model.load_state_dict(state_dict, strict=False)
             else:
                 raise FileNotFoundError(

@@ -3,7 +3,7 @@ set -e
 export HYDRA_FULL_ERROR=1
 
 # ============ CONFIGURATION ============
-DATA_ROOT="/work/courses/3dv/team21/datasets/bag_groceries"
+DATA_ROOT="/work/courses/3dv/team21/datasets/bag_groceries_communal"
 
 if [ -z "${NUM_GPUS:-}" ]; then
   NUM_GPUS=$(nvidia-smi -L 2>/dev/null | wc -l)
@@ -16,37 +16,47 @@ EULER_CKPT_DIR="/cluster/scratch/rwalia/pretrained_checkpoints"
 
 # Local temp directory for checkpoints (wiped after job ends)
 LOCAL_CKPT_DIR="/tmp/pretrained_checkpoints"
-LOCAL_OUTPUT_DIR="/tmp/dreamzero_franka_lora_output"
+TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+LOCAL_OUTPUT_DIR="/tmp/dreamzero_franka_lora_output_${TIMESTAMP}"
 
 # Where to sync training output back to on Euler
-EULER_OUTPUT_DIR="/cluster/scratch/rwalia/training_output/dreamzero_franka_lora"
+EULER_OUTPUT_DIR="/cluster/scratch/rwalia/training_output/dreamzero_franka_lora_${TIMESTAMP}"
 # =======================================
 
 # ============ RSYNC CHECKPOINTS FROM EULER → /tmp ============
-echo "=== Syncing checkpoints from Euler to /tmp ==="
 mkdir -p "$LOCAL_CKPT_DIR"
 
-echo "  Syncing Wan2.1-I2V-14B-480P (required files only, ~51 GB)..."
-rsync -avP \
-    --include='diffusion_pytorch_model-*.safetensors' \
-    --include='diffusion_pytorch_model.safetensors.index.json' \
-    --include='models_t5_umt5-xxl-enc-bf16.pth' \
-    --include='models_clip_open-clip-xlm-roberta-large-vit-huge-14.pth' \
-    --include='Wan2.1_VAE.pth' \
-    --include='config.json' \
-    --exclude='*' \
-    "${EULER_HOST}:${EULER_CKPT_DIR}/Wan2.1-I2V-14B-480P/" "${LOCAL_CKPT_DIR}/Wan2.1-I2V-14B-480P/"
+# Only sync Wan2.1 checkpoints if not already present
+if [ ! -f "${LOCAL_CKPT_DIR}/Wan2.1-I2V-14B-480P/config.json" ]; then
+    echo "=== Syncing Wan2.1-I2V-14B-480P from Euler (required files only, ~51 GB)... ==="
+    rsync -avP \
+        --include='diffusion_pytorch_model-*.safetensors' \
+        --include='diffusion_pytorch_model.safetensors.index.json' \
+        --include='models_t5_umt5-xxl-enc-bf16.pth' \
+        --include='models_clip_open-clip-xlm-roberta-large-vit-huge-14.pth' \
+        --include='Wan2.1_VAE.pth' \
+        --include='config.json' \
+        --exclude='*' \
+        "${EULER_HOST}:${EULER_CKPT_DIR}/Wan2.1-I2V-14B-480P/" "${LOCAL_CKPT_DIR}/Wan2.1-I2V-14B-480P/"
+else
+    echo "=== Wan2.1-I2V-14B-480P already present, skipping sync ==="
+fi
 
-echo "  Syncing umt5-xxl (tokenizer files only, ~5 MB)..."
-rsync -avP \
-    --include='config.json' \
-    --include='spiece.model' \
-    --include='tokenizer_config.json' \
-    --include='special_tokens_map.json' \
-    --exclude='*' \
-    "${EULER_HOST}:${EULER_CKPT_DIR}/umt5-xxl/" "${LOCAL_CKPT_DIR}/umt5-xxl/"
+# Only sync tokenizer if not already present
+if [ ! -f "${LOCAL_CKPT_DIR}/umt5-xxl/spiece.model" ]; then
+    echo "=== Syncing umt5-xxl tokenizer from Euler (~5 MB)... ==="
+    rsync -avP \
+        --include='config.json' \
+        --include='spiece.model' \
+        --include='tokenizer_config.json' \
+        --include='special_tokens_map.json' \
+        --exclude='*' \
+        "${EULER_HOST}:${EULER_CKPT_DIR}/umt5-xxl/" "${LOCAL_CKPT_DIR}/umt5-xxl/"
+else
+    echo "=== umt5-xxl tokenizer already present, skipping sync ==="
+fi
 
-echo "=== Checkpoint sync complete ==="
+echo "=== Checkpoint check complete ==="
 
 WAN_CKPT_DIR="${LOCAL_CKPT_DIR}/Wan2.1-I2V-14B-480P"
 TOKENIZER_DIR="${LOCAL_CKPT_DIR}/umt5-xxl"
@@ -96,6 +106,7 @@ torchrun --nproc_per_node $NUM_GPUS --standalone \
     training_args.warmup_ratio=0.05 \
     output_dir=$OUTPUT_DIR \
     per_device_train_batch_size=1 \
+    global_batch_size=1 \
     max_steps=20000 \
     weight_decay=1e-5 \
     save_total_limit=5 \
@@ -111,6 +122,7 @@ torchrun --nproc_per_node $NUM_GPUS --standalone \
     max_chunk_size=1 \
     frame_seqlen=880 \
     save_strategy=steps \
+    training_args.logging_steps=1 \
     franka_data_root=$DATA_ROOT \
     dit_version=$WAN_CKPT_DIR \
     text_encoder_pretrained_path=$WAN_CKPT_DIR/models_t5_umt5-xxl-enc-bf16.pth \

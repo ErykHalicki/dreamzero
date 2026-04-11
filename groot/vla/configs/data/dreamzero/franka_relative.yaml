@@ -4,7 +4,8 @@ defaults:
   - dreamzero/base_48_wan_fine_aug_relative
   - _self_
 
-max_state_dim: 64
+max_state_dim: 48
+max_action_dim: 48
 use_global_metadata: false
 relative_action: true
 relative_action_per_horizon: false

@@ -379,13 +379,20 @@ modality_config_franka:
 transform_franka:
   _target_: groot.vla.data.transform.ComposedModalityTransform
   transforms:
-    # Video transforms
+    # Video transforms (per-camera since cameras have different native resolutions)
     - <<: *totensor_cfg
-      apply_to: ${modality_config_franka.video.modality_keys}
+      apply_to: [video.aria_rgb_cam]
+    - <<: *totensor_cfg
+      apply_to: [video.oakd_front_view]
     - <<: *crop_cfg
-      apply_to: ${modality_config_franka.video.modality_keys}
+      apply_to: [video.aria_rgb_cam]
+    - <<: *crop_cfg
+      apply_to: [video.oakd_front_view]
     - <<: *resize_cfg
-      apply_to: ${modality_config_franka.video.modality_keys}
+      apply_to: [video.aria_rgb_cam]
+    - <<: *resize_cfg
+      apply_to: [video.oakd_front_view]
+    # After resize both cameras are the same resolution, can apply jointly
     - <<: *color_jitter_cfg
       apply_to: ${modality_config_franka.video.modality_keys}
     - <<: *to_numpy_cfg

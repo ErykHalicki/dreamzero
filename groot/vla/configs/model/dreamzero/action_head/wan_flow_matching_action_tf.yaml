@@ -38,7 +38,7 @@ action_head_cfg:
     model_dtype: float32
     max_state_dim: ${max_state_dim}
     max_action_dim: ${max_action_dim}
-    action_loss_embodiment_ids: [26, 17, 32]
+    action_loss_embodiment_ids: [26, 17, 32, 33]
     hidden_size: ${hidden_size}
     input_embedding_dim: 1536
     backbone_embedding_dim: ${backbone_hidden_size}
@@ -70,6 +70,8 @@ action_head_cfg:
       eps: 1e-6
       num_heads: 40
       num_layers: 40
+      action_dim: ${max_action_dim}
+      max_state_dim: ${max_state_dim}
       max_chunk_size: ${max_chunk_size}
       num_frame_per_block: ${num_frame_per_block}
       num_action_per_block: ${num_action_per_block}
