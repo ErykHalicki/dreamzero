@@ -322,7 +322,8 @@ class BaseTrainer(transformers.Trainer):
     def __init__(self, **kwargs):
         # Increase the cache size limit for torch._dynamo to
         # accommodate videos with different numbers of frames.
-        torch._dynamo.config.cache_size_limit = 1000
+        # Keep modest to avoid memory bloat from compiled kernel caching.
+        torch._dynamo.config.cache_size_limit = 8
 
         self.compute_dtype = kwargs.pop("compute_dtype")
         self.output_dir = kwargs.pop("output_dir")

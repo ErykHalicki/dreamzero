@@ -1,6 +1,7 @@
 #!/bin/bash
 set -e
 export HYDRA_FULL_ERROR=1
+export PYTORCH_ALLOC_CONF=expandable_segments:True,garbage_collection_threshold:0.6
 
 # ============ CONFIGURATION ============
 DATA_ROOT="/work/courses/3dv/team21/datasets/bag_groceries_communal"
@@ -83,6 +84,21 @@ sync_output_to_euler() {
 }
 trap sync_output_to_euler EXIT
 
+# ============ MEMORY MONITOR (GB10 unified memory) ============
+monitor_memory() {
+    while true; do
+        echo "===== MEMORY @ $(date +%H:%M:%S) ====="
+        echo "-- System RAM --"
+        free -h | awk 'NR==1||NR==2{print}'
+        echo "================================="
+        sleep 20
+    done
+}
+monitor_memory &
+MONITOR_PID=$!
+# Kill monitor when script exits
+trap 'kill $MONITOR_PID 2>/dev/null; sync_output_to_euler' EXIT
+
 # ============ TRAINING ============
 torchrun --nproc_per_node $NUM_GPUS --standalone \
     groot/vla/experiment/experiment.py \
@@ -100,14 +116,15 @@ torchrun --nproc_per_node $NUM_GPUS --standalone \
     num_action_per_block=24 \
     num_state_per_block=1 \
     seed=42 \
-    training_args.learning_rate=1e-5 \
-    training_args.deepspeed="groot/vla/configs/deepspeed/zero2_offload.json" \
-    save_steps=5000 \
+    gradient_checkpointing=true \
+    training_args.learning_rate=1e-4 \
+    training_args.deepspeed="groot/vla/configs/deepspeed/zero2.json" \
+    save_steps=50 \
     training_args.warmup_ratio=0.05 \
     output_dir=$OUTPUT_DIR \
     per_device_train_batch_size=1 \
     global_batch_size=1 \
-    max_steps=20000 \
+    max_steps=1000 \
     weight_decay=1e-5 \
     save_total_limit=5 \
     upload_checkpoints=false \
@@ -115,12 +132,12 @@ torchrun --nproc_per_node $NUM_GPUS --standalone \
     tf32=true \
     eval_bf16=true \
     dataloader_pin_memory=false \
-    dataloader_num_workers=1 \
+    dataloader_num_workers=0 \
     image_resolution_width=320 \
     image_resolution_height=176 \
     save_lora_only=true \
     max_chunk_size=1 \
-    frame_seqlen=880 \
+    frame_seqlen=440 \
     save_strategy=steps \
     training_args.logging_steps=1 \
     franka_data_root=$DATA_ROOT \
@@ -130,5 +147,6 @@ torchrun --nproc_per_node $NUM_GPUS --standalone \
     vae_pretrained_path=$WAN_CKPT_DIR/Wan2.1_VAE.pth \
     tokenizer_path=$TOKENIZER_DIR \
     pretrained_model_path=$PRETRAINED_MODEL \
+    ++train_dataset.dataset_kwargs.num_steps_per_shard=6000 \
     ++action_head_cfg.config.skip_component_loading=true \
     ++action_head_cfg.config.defer_lora_injection=true

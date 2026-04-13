@@ -357,7 +357,15 @@ class DreamTransform(InvertibleModalityTransform):
                 concat_images[0, :, :, h:, w:] = right_exterior
 
                 return concat_images
-            
+
+            # For Franka embodiment: side-by-side layout (2 views, no wasted black space)
+            # Layout: [aria_rgb_cam | oakd_front_view]
+            if self.embodiment_tag == EmbodimentTag.FRANKA and v == 2:
+                concat_images = np.zeros((1, t, c, h, 2 * w), dtype=images.dtype)
+                concat_images[0, :, :, :, :w] = images[0]   # aria_rgb_cam (left)
+                concat_images[0, :, :, :, w:] = images[1]    # oakd_front_view (right)
+                return concat_images
+
             # For other embodiments: use 2x2 grid layout
             # Layout: [head, right]
             #         [left, black]
