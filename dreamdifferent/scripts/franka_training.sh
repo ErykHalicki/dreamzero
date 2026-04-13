@@ -117,14 +117,14 @@ torchrun --nproc_per_node $NUM_GPUS --standalone \
     num_state_per_block=1 \
     seed=42 \
     gradient_checkpointing=true \
-    training_args.learning_rate=1e-4 \
+    training_args.learning_rate=1e-5 \
     training_args.deepspeed="groot/vla/configs/deepspeed/zero2.json" \
-    save_steps=50 \
+    save_steps=200 \
     training_args.warmup_ratio=0.05 \
     output_dir=$OUTPUT_DIR \
     per_device_train_batch_size=1 \
     global_batch_size=1 \
-    max_steps=1000 \
+    max_steps=2000 \
     weight_decay=1e-5 \
     save_total_limit=5 \
     upload_checkpoints=false \

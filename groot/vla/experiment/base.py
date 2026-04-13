@@ -483,16 +483,18 @@ class BaseTrainer(transformers.Trainer):
     def save_model(self, output_dir: Optional[str], _internal_call: bool):
 
         ## save tuned model separately
-        if self.is_deepspeed_enabled:
+        if self.base_cfg.save_lora_only:
+            # Save only the trainable (LoRA) parameters without materializing the
+            # full state dict, which would temporarily double memory (~28 GiB for 14B).
+            import gc
+            train_keys = set(k for k, v in self.model.named_parameters() if v.requires_grad)
+            lora_state_dict = {k: v.detach().cpu() for k, v in self.model.named_parameters() if k in train_keys}
+            gc.collect()
+            state_dict = lora_state_dict
+        elif self.is_deepspeed_enabled:
             state_dict = self.accelerator.get_state_dict(self.deepspeed)
         else:
             state_dict = self.model.state_dict()
-
-        if self.base_cfg.save_lora_only:
-            # Save only the trainable parameters
-            train_key = [k for k, v in self.model.named_parameters() if v.requires_grad]
-            lora_state_dict = {k: v for k, v in self.model.state_dict().items() if k in train_key}
-            state_dict = lora_state_dict
 
         if self.args.should_save:
             ret = self.model.save_pretrained(output_dir, state_dict=state_dict)
@@ -510,6 +512,31 @@ class BaseTrainer(transformers.Trainer):
                 self.model.action_head.value_model.save_pretrained(value_model_output_dir)
 
             return ret
+
+    def _save_optimizer_and_scheduler(self, output_dir):
+        """Override to exclude frozen parameters from DeepSpeed checkpoint when
+        save_lora_only is enabled.  The default Trainer path calls
+        ``self.model_wrapped.save_checkpoint(output_dir)`` which gathers ALL
+        parameters + optimizer states onto one node, causing OOM on
+        memory-constrained machines (e.g. GB10 with 120 GB unified RAM).
+
+        When ``save_lora_only=True`` we pass ``exclude_frozen_parameters=True``
+        so that DeepSpeed only saves the trainable (LoRA) optimizer states.
+        """
+        if self.is_deepspeed_enabled and self.base_cfg.save_lora_only:
+            import inspect
+            accept_exclude = "exclude_frozen_parameters" in set(
+                inspect.signature(self.model_wrapped.save_checkpoint).parameters.keys()
+            )
+            if accept_exclude:
+                mprint("DeepSpeed save_checkpoint with exclude_frozen_parameters=True (LoRA-only)")
+                self.model_wrapped.save_checkpoint(output_dir, exclude_frozen_parameters=True)
+            else:
+                mprint("WARNING: DeepSpeed version does not support exclude_frozen_parameters; "
+                       "falling back to default save (may use significant memory)")
+                self.model_wrapped.save_checkpoint(output_dir)
+        else:
+            super()._save_optimizer_and_scheduler(output_dir)
 
     def train(
         self,
