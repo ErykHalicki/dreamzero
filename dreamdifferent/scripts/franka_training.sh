@@ -22,6 +22,9 @@ LOCAL_OUTPUT_DIR="/tmp/dreamzero_franka_lora_output_${TIMESTAMP}"
 
 # Where to sync training output back to on Euler
 EULER_OUTPUT_DIR="/cluster/scratch/rwalia/training_output/dreamzero_franka_lora_${TIMESTAMP}"
+
+# Local shared-filesystem copy (persists after job ends)
+LOCAL_SHARED_OUTPUT_DIR="/work/courses/3dv/team21/training_output/dreamzero_franka_lora_${TIMESTAMP}"
 # =======================================
 
 # ============ RSYNC CHECKPOINTS FROM EULER → /tmp ============
@@ -65,6 +68,12 @@ PRETRAINED_MODEL="/work/scratch/rwalia/checkpoints/DreamZero-AgiBot"
 OUTPUT_DIR="${LOCAL_OUTPUT_DIR}"
 
 mkdir -p "$OUTPUT_DIR"
+mkdir -p "$LOCAL_SHARED_OUTPUT_DIR"
+
+# Copy this training script into the output dir for reproducibility
+SCRIPT_PATH="$(readlink -f "$0")"
+cp "$SCRIPT_PATH" "$OUTPUT_DIR/franka_training.sh"
+cp "$SCRIPT_PATH" "$LOCAL_SHARED_OUTPUT_DIR/franka_training.sh"
 
 # ============ VALIDATION ============
 if [ ! -d "$DATA_ROOT" ]; then
@@ -76,13 +85,68 @@ if [ ! -f "$DATA_ROOT/meta/embodiment.json" ]; then
     exit 1
 fi
 
-# ============ SYNC OUTPUT BACK TO EULER (trap on exit) ============
+# ============ SYNC OUTPUT BACK TO EULER ============
+# Interval (seconds) between periodic checkpoint syncs
+SYNC_INTERVAL=${SYNC_INTERVAL:-1200}   # default: every 20 minutes
+
 sync_output_to_euler() {
-    echo "=== Syncing training output back to Euler ==="
-    rsync -avP "${OUTPUT_DIR}/" "${EULER_HOST}:${EULER_OUTPUT_DIR}/"
-    echo "=== Output sync complete ==="
+    echo "=== Syncing training output ($(date)) ==="
+    # Sync to Euler scratch (all checkpoints)
+    rsync -a --update "${OUTPUT_DIR}/" "${EULER_HOST}:${EULER_OUTPUT_DIR}/" && \
+        echo "=== Euler sync complete ===" || \
+        echo "=== WARNING: Euler sync failed ==="
+
+    # Sync to local shared filesystem — only the latest checkpoint + non-checkpoint files
+    # Find the most recent checkpoint-* directory by modification time
+    LATEST_CKPT=$(ls -td "${OUTPUT_DIR}"/checkpoint-* 2>/dev/null | head -1)
+    if [ -n "$LATEST_CKPT" ]; then
+        LATEST_CKPT_NAME=$(basename "$LATEST_CKPT")
+        # Remove any old checkpoint dirs from the shared output
+        for old_ckpt in "${LOCAL_SHARED_OUTPUT_DIR}"/checkpoint-*; do
+            if [ -d "$old_ckpt" ] && [ "$(basename "$old_ckpt")" != "$LATEST_CKPT_NAME" ]; then
+                echo "=== Removing old local checkpoint: $(basename "$old_ckpt") ==="
+                rm -rf "$old_ckpt"
+            fi
+        done
+        # Sync the latest checkpoint
+        rsync -a --update "$LATEST_CKPT/" "${LOCAL_SHARED_OUTPUT_DIR}/${LATEST_CKPT_NAME}/"
+    fi
+    # Sync non-checkpoint files (logs, script, etc.) — exclude wandb & checkpoint dirs
+    rsync -a --update --exclude='checkpoint-*' --exclude='wandb/' --exclude='wandb-*' "${OUTPUT_DIR}/" "${LOCAL_SHARED_OUTPUT_DIR}/" && \
+        echo "=== Local shared sync complete ===" || \
+        echo "=== WARNING: local shared sync failed ==="
 }
-trap sync_output_to_euler EXIT
+
+# Periodic background sync — ensures checkpoints reach Euler
+# even if the node is killed without warning.
+periodic_sync() {
+    while true; do
+        sleep "$SYNC_INTERVAL"
+        sync_output_to_euler
+    done
+}
+periodic_sync &
+SYNC_PID=$!
+
+# ============ CLEANUP & SIGNAL HANDLING ============
+# When the SLURM time limit hits, the scheduler sends SIGTERM first
+# (with a short grace period before SIGKILL). We trap it to:
+#   1. kill the training process so we reclaim the foreground
+#   2. do a final sync within the grace window
+CLEANUP_DONE=0
+cleanup() {
+    # Guard against running twice (SIGTERM → exit → EXIT trap)
+    if [ "$CLEANUP_DONE" -eq 1 ]; then return; fi
+    CLEANUP_DONE=1
+    echo "=== Caught signal / exit — cleaning up ($(date)) ==="
+    # Stop background helpers
+    kill $SYNC_PID  2>/dev/null || true
+    kill $MONITOR_PID 2>/dev/null || true
+    kill $TRAIN_PID 2>/dev/null || true
+    wait $TRAIN_PID 2>/dev/null || true
+    # No final sync — rely on periodic background sync
+}
+trap cleanup SIGTERM SIGINT EXIT
 
 # ============ MEMORY MONITOR (GB10 unified memory) ============
 monitor_memory() {
@@ -96,10 +160,9 @@ monitor_memory() {
 }
 monitor_memory &
 MONITOR_PID=$!
-# Kill monitor when script exits
-trap 'kill $MONITOR_PID 2>/dev/null; sync_output_to_euler' EXIT
 
 # ============ TRAINING ============
+# Run in background so traps can fire while training is in progress
 torchrun --nproc_per_node $NUM_GPUS --standalone \
     groot/vla/experiment/experiment.py \
     report_to=wandb \
@@ -119,14 +182,14 @@ torchrun --nproc_per_node $NUM_GPUS --standalone \
     gradient_checkpointing=true \
     training_args.learning_rate=1e-5 \
     training_args.deepspeed="groot/vla/configs/deepspeed/zero2.json" \
-    save_steps=200 \
+    save_steps=50 \
     training_args.warmup_ratio=0.05 \
     output_dir=$OUTPUT_DIR \
     per_device_train_batch_size=1 \
-    global_batch_size=1 \
-    max_steps=2000 \
+    global_batch_size=2 \
+    max_steps=5000 \
     weight_decay=1e-5 \
-    save_total_limit=5 \
+    save_total_limit=10 \
     upload_checkpoints=false \
     bf16=true \
     tf32=true \
@@ -136,7 +199,7 @@ torchrun --nproc_per_node $NUM_GPUS --standalone \
     image_resolution_width=320 \
     image_resolution_height=176 \
     save_lora_only=true \
-    max_chunk_size=1 \
+    max_chunk_size=2 \
     frame_seqlen=440 \
     save_strategy=steps \
     training_args.logging_steps=1 \
@@ -149,4 +212,9 @@ torchrun --nproc_per_node $NUM_GPUS --standalone \
     pretrained_model_path=$PRETRAINED_MODEL \
     ++train_dataset.dataset_kwargs.num_steps_per_shard=6000 \
     ++action_head_cfg.config.skip_component_loading=true \
-    ++action_head_cfg.config.defer_lora_injection=true
+    ++action_head_cfg.config.defer_lora_injection=true &
+TRAIN_PID=$!
+wait $TRAIN_PID
+TRAIN_EXIT=$?
+echo "=== Training exited with code $TRAIN_EXIT ==="
+# Final sync handled by the EXIT trap
