@@ -134,7 +134,9 @@ class SingleGPUAgibotPolicy:
     frame accumulation, and action format conversion.
     """
 
-    FRAMES_PER_CHUNK = 4
+    # Agibot runtime uses K=2 latent frames per chunk. Keep this isolated to
+    # the Agibot server path so Franka/DROID behavior stays unchanged.
+    FRAMES_PER_CHUNK = 2
 
     def __init__(self, groot_policy: GrootSimPolicy, output_dir: str | None = None) -> None:
         self._policy = groot_policy
