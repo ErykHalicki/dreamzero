@@ -191,6 +191,7 @@ playground/
 batch_*.sh
 logs_*/
 runs/
+runs_agibot_scene_sweep/
 out/
 recordings/
 pyrightconfig.json
@@ -238,6 +239,10 @@ dump.rdb
 offline_open_loop_eval_plots/
 
 # yam eval data
+
+# Agibot local eval artifacts
+dreamzero_debug_scene*/
+scene*_h*_bx*_bz*.log
 groot/control/envs/yam/data/eval/*
 /models
 /data
@@ -248,3 +253,4 @@ video_pred_output*/
 
 dreamdifferent/data
 dreamzero_debug*/
+debug_bimanual*/
