@@ -17,7 +17,7 @@ In other words: `eval_utils` is the runnable layer, but full robot support is al
 | Original DROID / remote websocket server | `run_sim_eval_remote.py` | Working baseline | Same as above, but connects to a remote `ws://` or `wss://` server. |
 | AgiBot G1 | `run_sim_eval_agibot.py` | Main working DreamZero checkpoint eval path | Uses env id `AGIBOT_G1_DREAMZERO`, dedicated AgiBot observation/action adapter, low-level stepping, and AgiBot scene presets. |
 | Dual Franka | `run_sim_eval_bimanual.py` | Partial / reference path | Loads `DROID_BIMANUAL_RIGHT_ONLY`, adds a passive left Franka and left wrist camera, but policy I/O is still right-arm-only DROID format. |
-| PandaOrca / Orca-hand prototype | `inspect_pandaorca_scene.py` | Inspect only / TODO | USD loading works, but there is no policy/action/observation wiring and no full eval runner yet. TODO: add a proper closed-loop evaluator for this variant. |
+| PandaOrca / Orca-hand prototype | `inspect_pandaorca_scene.py` | Inspect only / TODO | USD loading works, PandaOrca arms can now be brought up with calibrated left/right exterior cameras in the inspect path, but there is still no policy/action/observation wiring and no full eval runner yet. TODO: add a proper closed-loop evaluator for this variant. |
 
 ## Recommended workflows
 
@@ -96,12 +96,30 @@ Related serving helpers:
 These are not the same thing.
 
 - `run_sim_eval_bimanual.py` is a dual-Franka scene. It still reuses the original DROID-style right-arm 8D policy interface.
-- `inspect_pandaorca_scene.py` loads PandaOrca arms into the DROID scene and verifies articulation bring-up, but it explicitly does not implement DreamZero communication yet.
+- `inspect_pandaorca_scene.py` loads PandaOrca arms into the DROID scene, verifies articulation bring-up, and now also attaches calibrated `left_cam` / `right_cam` exterior cameras in the inspect path.
 - `inspect_franka_workspace.py` is a separate geometry / workspace utility for sampling reachable end-effector points in Isaac.
 
 If you are looking for a full evaluation path for the Franka-bimanual-plus-Orca-hand variant, that does not exist yet in the same sense that `run_sim_eval_agibot.py` exists for AgiBot.
 
 TODO: implement a proper closed-loop evaluator for the Franka-bimanual-plus-Orca-hand variant, instead of only the current inspect scaffold.
+
+Current PandaOrca inspect example:
+
+```bash
+python eval_utils/inspect_pandaorca_scene.py --variant dual --camera-resolution full --no-headless
+```
+
+Notes for the PandaOrca inspect path:
+
+- `--camera-resolution full` uses the imported ARIA-style `640x480` intrinsics.
+- `--camera-resolution half` uses the matching half-resolution `320x240` intrinsics.
+- The current camera calibration is applied in the inspect path only.
+- This is still for scene/camera validation, not DreamZero closed-loop evaluation.
+
+Expected PandaOrca camera prim paths:
+
+- `/World/envs/env_0/pandaorca_right/right_exterior_camera`
+- `/World/envs/env_0/pandaorca_left/left_exterior_camera`
 
 ## File map
 
@@ -112,7 +130,7 @@ TODO: implement a proper closed-loop evaluator for the Franka-bimanual-plus-Orca
 | `run_sim_eval_bimanual.py` | Dual-Franka scene variant with passive left arm and extra left wrist camera. |
 | `run_sim_eval_agibot.py` | Main AgiBot G1 DreamZero evaluation entrypoint. |
 | `inspect_agibot_scene.py` | Bring-up and scene inspection helper for AgiBot without DreamZero inference. |
-| `inspect_pandaorca_scene.py` | PandaOrca USD inspection helper inside the DROID scene; no closed-loop evaluation yet. |
+| `inspect_pandaorca_scene.py` | PandaOrca USD inspection helper inside the DROID scene; now includes calibrated left/right exterior cameras for visual validation, but no closed-loop evaluation yet. |
 | `inspect_franka_workspace.py` | Workspace sampler for Franka-like robots. |
 | `policy_client.py` | Websocket client used by the evaluation-side inference adapters. |
 | `policy_server.py` | Generic websocket policy server wrapper. |
@@ -131,6 +149,12 @@ For a robot to be "fully supported", you usually need all of the following:
 AgiBot has all four pieces.
 
 The PandaOrca / Orca-hand path currently only has the inspection side of step 1.
+
+What is already done in that inspect path:
+
+- PandaOrca left/right arm USD references can be loaded into the DROID scene.
+- DROID-like PandaOrca arm pose initialization is available for bring-up.
+- Calibrated `left_cam` / `right_cam` exterior cameras are attached for visual inspection.
 
 TODO: complete steps 2-4 for PandaOrca / Orca-hand so it becomes a fully supported evaluation path.
 
@@ -275,7 +299,7 @@ Right now the codebase has an inspection scaffold, but not a full evaluator.
 The missing pieces are:
 
 - a registered env config for the PandaOrca / Orca-hand robot
-- camera observation wiring for the views you want DreamZero to consume
+- camera observation wiring for the calibrated views you want DreamZero to consume
 - state observation terms for the arm and hand joints
 - action mapping from DreamZero output into `fer_joint*` and the Orca-hand joints
 - reset logic for the robot and scene

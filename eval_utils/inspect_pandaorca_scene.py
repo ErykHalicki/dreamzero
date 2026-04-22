@@ -9,6 +9,7 @@ import traceback
 from pathlib import Path
 from typing import Literal
 
+import numpy as np
 import tyro
 
 
@@ -20,6 +21,8 @@ PANDAORCA_USD_ROOT = WORKSPACE_ROOT / "pandaorca_description" / "usd"
 ENV_ROOT_PRIM_PATH = "/World/envs/env_0"
 RIGHT_ARM_PRIM_PATH = f"{ENV_ROOT_PRIM_PATH}/pandaorca_right"
 LEFT_ARM_PRIM_PATH = f"{ENV_ROOT_PRIM_PATH}/pandaorca_left"
+RIGHT_CAMERA_PRIM_PATH = f"{RIGHT_ARM_PRIM_PATH}/right_exterior_camera"
+LEFT_CAMERA_PRIM_PATH = f"{LEFT_ARM_PRIM_PATH}/left_exterior_camera"
 
 RIGHT_ARM_USD_PATH = (
     PANDAORCA_USD_ROOT / "fer_orcahand_right_extended" / "fer_orcahand_right_extended.usd"
@@ -29,6 +32,61 @@ LEFT_ARM_USD_PATH = (
 )
 
 IDENTITY_QUAT_WXYZ = (1.0, 0.0, 0.0, 0.0)
+
+PANDAORCA_CAMERA_CALIB_CAM_TO_BASE = {
+    "left": np.array(
+        [
+            [-0.02199727, -0.80581615, 0.59175708, 0.20403467],
+            [-0.99905014, 0.03998766, 0.01731508, -0.25486327],
+            [-0.03761575, -0.59081411, -0.80593036, 0.43379187],
+            [0.0, 0.0, 0.0, 1.0],
+        ],
+        dtype=np.float64,
+    ),
+    "right": np.array(
+        [
+            [0.02933941, -0.83227828, 0.55358113, 0.17515134],
+            [-0.99642232, 0.01956109, 0.0822187, 0.34649483],
+            [-0.07925749, -0.55401284, -0.82872675, 0.46895363],
+            [0.0, 0.0, 0.0, 1.0],
+        ],
+        dtype=np.float64,
+    ),
+}
+
+ARIA_INTRINSICS = np.array(
+    [
+        [133.25430222 * 2.0, 0.0, 320.0, 0.0],
+        [0.0, 133.25430222 * 2.0, 240.0, 0.0],
+        [0.0, 0.0, 1.0, 0.0],
+    ],
+    dtype=np.float64,
+)
+
+ARIA_INTRINSICS_HALF = np.array(
+    [
+        [133.25430222, 0.0, 320.0 / 2.0, 0.0],
+        [0.0, 133.25430222, 240.0 / 2.0, 0.0],
+        [0.0, 0.0, 1.0, 0.0],
+    ],
+    dtype=np.float64,
+)
+
+ARIA_HORIZONTAL_APERTURE = 5.376
+ARIA_VERTICAL_APERTURE = ARIA_HORIZONTAL_APERTURE * 480.0 / 640.0
+
+PANDAORCA_CAMERA_RESOLUTIONS = {
+    "full": {
+        "width": 640,
+        "height": 480,
+        "intrinsics": ARIA_INTRINSICS,
+    },
+    "half": {
+        "width": 320,
+        "height": 240,
+        "intrinsics": ARIA_INTRINSICS_HALF,
+    },
+}
 
 DROID_LIKE_ARM_JOINT_POS = {
     "fer_joint1": 0.0,
@@ -149,6 +207,123 @@ def _set_or_create_orient_op(xformable, orient_wxyz: tuple[float, float, float, 
         xformable.AddOrientOp(UsdGeom.XformOp.PrecisionDouble).Set(quat)
 
 
+def _ros_to_opengl_rotation(rotation_ros: np.ndarray) -> np.ndarray:
+    rotation_gl = rotation_ros.copy()
+    rotation_gl[:, 1] *= -1.0
+    rotation_gl[:, 2] *= -1.0
+    return rotation_gl
+
+
+def _rotation_matrix_to_quat_wxyz(rotation: np.ndarray) -> tuple[float, float, float, float]:
+    trace = float(np.trace(rotation))
+    if trace > 0.0:
+        scale = math.sqrt(trace + 1.0) * 2.0
+        quat = np.array(
+            [
+                0.25 * scale,
+                (rotation[2, 1] - rotation[1, 2]) / scale,
+                (rotation[0, 2] - rotation[2, 0]) / scale,
+                (rotation[1, 0] - rotation[0, 1]) / scale,
+            ],
+            dtype=np.float64,
+        )
+    elif rotation[0, 0] > rotation[1, 1] and rotation[0, 0] > rotation[2, 2]:
+        scale = math.sqrt(1.0 + rotation[0, 0] - rotation[1, 1] - rotation[2, 2]) * 2.0
+        quat = np.array(
+            [
+                (rotation[2, 1] - rotation[1, 2]) / scale,
+                0.25 * scale,
+                (rotation[0, 1] + rotation[1, 0]) / scale,
+                (rotation[0, 2] + rotation[2, 0]) / scale,
+            ],
+            dtype=np.float64,
+        )
+    elif rotation[1, 1] > rotation[2, 2]:
+        scale = math.sqrt(1.0 + rotation[1, 1] - rotation[0, 0] - rotation[2, 2]) * 2.0
+        quat = np.array(
+            [
+                (rotation[0, 2] - rotation[2, 0]) / scale,
+                (rotation[0, 1] + rotation[1, 0]) / scale,
+                0.25 * scale,
+                (rotation[1, 2] + rotation[2, 1]) / scale,
+            ],
+            dtype=np.float64,
+        )
+    else:
+        scale = math.sqrt(1.0 + rotation[2, 2] - rotation[0, 0] - rotation[1, 1]) * 2.0
+        quat = np.array(
+            [
+                (rotation[1, 0] - rotation[0, 1]) / scale,
+                (rotation[0, 2] + rotation[2, 0]) / scale,
+                (rotation[1, 2] + rotation[2, 1]) / scale,
+                0.25 * scale,
+            ],
+            dtype=np.float64,
+        )
+    quat /= np.linalg.norm(quat)
+    return tuple(float(v) for v in quat)
+
+
+def _add_pandaorca_camera(
+    *,
+    prim_path: str,
+    parent_prim_path: str,
+    label: str,
+    cam_to_base: np.ndarray,
+    resolution_mode: Literal["full", "half"],
+) -> dict[str, object]:
+    from pxr import Gf, UsdGeom
+
+    stage = _get_stage()
+    existing = stage.GetPrimAtPath(prim_path)
+    if existing.IsValid():
+        raise ValueError(f"Camera prim path already exists in stage: {prim_path}")
+
+    # The calibration is provided as camera -> arm-base, which already matches
+    # the local USD transform direction we need here: parent(base) <- child(cam).
+    # The remaining conversion is only between camera axis conventions:
+    # ROS/OpenCV-style (+Z forward, +Y down) -> USD/OpenGL (-Z forward, +Y up).
+    translate_xyz = tuple(float(v) for v in cam_to_base[:3, 3])
+    orient_wxyz = _rotation_matrix_to_quat_wxyz(_ros_to_opengl_rotation(cam_to_base[:3, :3]))
+
+    camera_cfg = PANDAORCA_CAMERA_RESOLUTIONS[resolution_mode]
+    intrinsics = camera_cfg["intrinsics"]
+    width = int(camera_cfg["width"])
+    height = int(camera_cfg["height"])
+    fx = float(intrinsics[0, 0])
+    focal_length = fx * ARIA_HORIZONTAL_APERTURE / float(width)
+
+    camera = UsdGeom.Camera.Define(stage, prim_path)
+    camera_prim = camera.GetPrim()
+    if not camera_prim.IsValid():
+        raise RuntimeError(f"Failed to define PandaOrca camera at path: {prim_path}")
+
+    xformable = UsdGeom.Xformable(camera_prim)
+    _set_or_create_translate_op(xformable, translate_xyz)
+    _set_or_create_orient_op(xformable, orient_wxyz)
+
+    camera.CreateProjectionAttr("perspective")
+    camera.CreateFocalLengthAttr(focal_length)
+    camera.CreateHorizontalApertureAttr(ARIA_HORIZONTAL_APERTURE)
+    camera.CreateVerticalApertureAttr(ARIA_VERTICAL_APERTURE)
+    camera.CreateClippingRangeAttr(Gf.Vec2f(0.01, 100.0))
+    camera.CreateFocusDistanceAttr(1.0)
+
+    return {
+        "label": label,
+        "prim_path": prim_path,
+        "parent_prim_path": parent_prim_path,
+        "resolution_mode": resolution_mode,
+        "width": width,
+        "height": height,
+        "focal_length": float(focal_length),
+        "horizontal_aperture": float(ARIA_HORIZONTAL_APERTURE),
+        "vertical_aperture": float(ARIA_VERTICAL_APERTURE),
+        "translate_xyz": translate_xyz,
+        "orient_wxyz": orient_wxyz,
+    }
+
+
 def _add_pandaorca_arm(
     prim_path: str,
     usd_path: Path,
@@ -227,6 +402,7 @@ def _print_scene_summary(
     scene_path: Path,
     variant: Literal["dual", "single"],
     arm_records: list[dict[str, object]],
+    camera_records: list[dict[str, object]],
     env_cfg,
 ) -> None:
     print(f"[PandaOrca inspect] base scene USD: {scene_path}")
@@ -248,6 +424,17 @@ def _print_scene_summary(
             f"usd={record['usd_path']} "
             f"translate={record['translate_xyz']} "
             f"arm_joint_pos={record.get('arm_joint_pos')}"
+        )
+    print("[PandaOrca inspect] added calibrated cameras:")
+    for record in camera_records:
+        print(
+            "  - "
+            f"label={record['label']} "
+            f"prim={record['prim_path']} "
+            f"parent={record['parent_prim_path']} "
+            f"resolution={record['width']}x{record['height']} ({record['resolution_mode']}) "
+            f"translate={record['translate_xyz']} "
+            f"orient={record['orient_wxyz']}"
         )
     print(f"[PandaOrca inspect] future control candidate prim: {RIGHT_ARM_PRIM_PATH}")
     print("[PandaOrca inspect] inspect only, no policy/action/obs wiring")
@@ -292,6 +479,7 @@ def _run_loop(
 def main(
     scene: int = 1,
     variant: Literal["dual", "single"] = "dual",
+    camera_resolution: Literal["full", "half"] = "full",
     headless: bool = False,
     play_physics: bool = False,
     frames: int = 0,
@@ -308,7 +496,7 @@ def main(
     )
     AppLauncher.add_app_launcher_args(parser)
     args_cli, _ = parser.parse_known_args()
-    args_cli.enable_cameras = False
+    args_cli.enable_cameras = True
     args_cli.headless = headless
     app_launcher = AppLauncher(args_cli)
     simulation_app = app_launcher.app
@@ -335,6 +523,7 @@ def main(
         _ensure_xform_prim(ENV_ROOT_PRIM_PATH)
 
         arm_records: list[dict[str, object]] = []
+        camera_records: list[dict[str, object]] = []
         pandaorca_robots: list[tuple[str, object]] = []
 
         resolved_left_y = -float(right_y) if left_y is None else float(left_y)
@@ -355,6 +544,15 @@ def main(
                 "translate_xyz": right_translate,
             }
         )
+        camera_records.append(
+            _add_pandaorca_camera(
+                prim_path=RIGHT_CAMERA_PRIM_PATH,
+                parent_prim_path=RIGHT_ARM_PRIM_PATH,
+                label="right_cam",
+                cam_to_base=PANDAORCA_CAMERA_CALIB_CAM_TO_BASE["right"],
+                resolution_mode=camera_resolution,
+            )
+        )
 
         if variant == "dual":
             left_translate = (float(base_x), resolved_left_y, float(base_z))
@@ -372,6 +570,15 @@ def main(
                     "usd_path": str(LEFT_ARM_USD_PATH),
                     "translate_xyz": left_translate,
                 }
+            )
+            camera_records.append(
+                _add_pandaorca_camera(
+                    prim_path=LEFT_CAMERA_PRIM_PATH,
+                    parent_prim_path=LEFT_ARM_PRIM_PATH,
+                    label="left_cam",
+                    cam_to_base=PANDAORCA_CAMERA_CALIB_CAM_TO_BASE["left"],
+                    resolution_mode=camera_resolution,
+                )
             )
 
         _wait_for_stage_load()
@@ -391,6 +598,7 @@ def main(
             scene_path=scene_path,
             variant=variant,
             arm_records=arm_records,
+            camera_records=camera_records,
             env_cfg=env_cfg,
         )
 
