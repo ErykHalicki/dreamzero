@@ -28,6 +28,10 @@ Franka/ORCA setup on the bag-groceries task.
 
 - The OpenPI fork used for these experiments lives in a separate repository and
   is linked here as a submodule.
+- Before launching Euler `sbatch` jobs from `openpi/`, prepare the submodule
+  environment once on a login node with `uv sync`. The compute nodes may not be
+  able to fetch the `lerobot` dependency from GitHub while bootstrapping a new
+  `.venv`.
 - Dataset-specific metadata and split tooling are kept at the DreamDifferent
   project level under `../datasets/`, not inside the baseline folder.
 - This directory is intended to hold baseline-specific code, run logs, and
