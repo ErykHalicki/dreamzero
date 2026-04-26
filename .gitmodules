@@ -1,0 +1,4 @@
+[submodule "dreamdifferent/baseline/openpi"]
+	path = dreamdifferent/baseline/openpi
+	url = git@github.com:EugeneSeo/openpi.git
+	branch = dreamdifferent-baselines

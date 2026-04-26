@@ -1,0 +1,74 @@
+{
+  "tasks_jsonl": [
+    {
+      "task_index": 0,
+      "task": "bags the groceries."
+    }
+  ],
+  "splits": {
+    "train": {
+      "num_episodes": 270,
+      "num_frames": 704454,
+      "length": {
+        "count": 270,
+        "sum": 704454,
+        "mean": 2609.088888888889,
+        "std": 644.5511957560992,
+        "min": 1565,
+        "q25": 2127,
+        "median": 2528,
+        "q75": 2860,
+        "max": 5416
+      },
+      "tasks": {
+        "0": 270
+      },
+      "bin_counts": {
+        "4": 54,
+        "2": 54,
+        "3": 54,
+        "0": 54,
+        "1": 54
+      }
+    },
+    "val": {
+      "num_episodes": 30,
+      "num_frames": 78091,
+      "length": {
+        "count": 30,
+        "sum": 78091,
+        "mean": 2603.0333333333333,
+        "std": 588.5373102493635,
+        "min": 1806,
+        "q25": 2135,
+        "median": 2460,
+        "q75": 2915,
+        "max": 4278
+      },
+      "tasks": {
+        "0": 30
+      },
+      "bin_counts": {
+        "4": 6,
+        "3": 6,
+        "1": 6,
+        "0": 6,
+        "2": 6
+      }
+    }
+  },
+  "video_counts": {
+    "observation.images.aria_rgb_cam": 300,
+    "observation.images.oakd_front_view": 300
+  },
+  "parquet_stats": {
+    "train": {
+      "available": false,
+      "reason": "pyarrow unavailable: ModuleNotFoundError: No module named 'pyarrow'"
+    },
+    "val": {
+      "available": false,
+      "reason": "pyarrow unavailable: ModuleNotFoundError: No module named 'pyarrow'"
+    }
+  }
+}

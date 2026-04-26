@@ -7,6 +7,12 @@ A research project from [NVIDIA GEAR Lab](https://research.nvidia.com/labs/gear/
 
 DreamZero is a World Action Model that jointly predicts actions and videos, achieving strong zero-shot performance on unseen tasks. This release package contains everything needed to load a pretrained DreamZero model and run distributed inference via a WebSocket server.
 
+## Local Project Extensions
+
+This checkout may also contain DreamDifferent team-specific materials under
+[`dreamdifferent/`](dreamdifferent), including OpenPI/pi0.5 baseline
+experiments and companion documentation.
+
 ## News
 
 - **02/27:** DreamZero is **#1 on both [MolmoSpaces]([https://huggingface.co/spaces/ai2-adapt/MolmoSpaces](https://molmospaces.allen.ai/leaderboard)) and [RoboArena]([https://robo-arena.github.io/](https://robo-arena.github.io/leaderboard))**! DreamZero-DROID is trained *from scratch* using only the DROID dataset — no pretraining on large-scale robot data, unlike competing VLAs. This demonstrates the strength of video-model backbones for generalist robot policies (VAMs/WAMs).
