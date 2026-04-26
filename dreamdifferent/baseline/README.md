@@ -6,18 +6,22 @@ Franka/ORCA setup on the bag-groceries task.
 
 ## Contents
 
-- [`notes/`](notes): project notes and transfer notes.
-- [`training_run_log.md`](training_run_log.md): compact record of the main
-  training runs that have been launched so far.
-- [`openpi/`](openpi): OpenPI fork submodule used for the baseline runs.
+- [`openpi/`](openpi): OpenPI fork submodule used for the current pi0.5
+  baseline runs.
+- [`training_log/`](training_log): experiment logs, run summaries, and training
+  progression notes.
+- [`transfer_notes/`](transfer_notes): project notes, transfer notes, and
+  comparison writeups.
 
 ## Recommended Reading Order
 
-1. Read [`training_run_log.md`](training_run_log.md) for the current run
-   history and checkpoint progression.
-2. Read `openpi/scripts/train/README.md` inside the OpenPI submodule for the
+1. Read [`training_log/`](training_log) for current run history and checkpoint
+   progression.
+2. Read [`transfer_notes/`](transfer_notes) for comparison notes and project
+   context.
+3. Read `openpi/scripts/train/README.md` inside the OpenPI submodule for the
    Euler-specific training and evaluation workflow.
-3. Inspect [`../datasets/bag_groceries_communal/`](../datasets/bag_groceries_communal)
+4. Inspect [`../datasets/bag_groceries_communal/`](../datasets/bag_groceries_communal)
    for the saved train/validation split and distribution checks.
 
 ## Notes
@@ -26,6 +30,6 @@ Franka/ORCA setup on the bag-groceries task.
   is linked here as a submodule.
 - Dataset-specific metadata and split tooling are kept at the DreamDifferent
   project level under `../datasets/`, not inside the baseline folder.
-- The original workspace-level copies of these files may still exist during the
-  transition; this directory is the intended long-term home for team-facing
-  baseline materials.
+- This directory is intended to hold baseline-specific code, run logs, and
+  comparison notes, while dataset artifacts stay at the DreamDifferent project
+  level.

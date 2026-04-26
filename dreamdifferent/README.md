@@ -13,6 +13,6 @@ workflow built around DreamZero.
 - [`docs/`](docs): DreamDifferent-specific documentation.
 - [`scripts/`](scripts): DreamDifferent-specific helper scripts.
 
-For the OpenPI/pi0.5 baseline work, start with:
+For baseline-related work, start with:
 
 - [`baseline/README.md`](baseline/README.md)
