@@ -247,3 +247,8 @@ video_pred_output*/
 **.h5
 
 dreamdifferent/data
+dreamdifferent/so101/data
+AGENT_WORKBOOK.md
+
+so101_*.json
+*.example
