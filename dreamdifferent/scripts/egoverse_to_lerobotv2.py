@@ -84,7 +84,7 @@ def make_features(task_type: str) -> dict:
             "names": ["height", "width", "channel"],
             "video_info": {
                 "video.fps": float(cfg["fps"]),
-                "video.codec": "av1",
+                "video.codec": "h264",
                 "video.pix_fmt": "yuv420p",
                 "video.is_depth_map": False,
                 "has_audio": False,
