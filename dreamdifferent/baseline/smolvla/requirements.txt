@@ -1,1 +1,4 @@
 lerobot[smolvla]==0.5.1
+h5py>=3.11
+numpy==2.2.6
+tqdm==4.67.3
