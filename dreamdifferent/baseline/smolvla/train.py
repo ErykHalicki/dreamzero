@@ -535,6 +535,7 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
         if is_log_step:
             logging.info(train_tracker)
             log_entry = {"step": step, **train_tracker.to_dict()}
+            cfg.output_dir.mkdir(parents=True, exist_ok=True)
             with open(cfg.output_dir / "loss_log.jsonl", "a") as f:
                 f.write(json.dumps(log_entry) + "\n")
             if wandb_logger:
