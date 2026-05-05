@@ -14,6 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import dataclasses
+import json
 import logging
 import time
 from contextlib import nullcontext
@@ -417,6 +418,59 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
     )
     dl_iter = cycle(dataloader)
 
+    # Auto batch size: find the largest batch size that fits in GPU memory.
+    # Probes forward+backward with doubling sizes, then binary searches the boundary.
+    # Rebuilds the dataloader if the found size differs from cfg.batch_size.
+    if is_main_process and device.type == "cuda":
+        logging.info("Auto-detecting max batch size...")
+        policy.train()
+        ref_batch = preprocessor(next(dl_iter))
+        ref = {k: v[0:1] for k, v in ref_batch.items() if isinstance(v, torch.Tensor)}
+
+        def _probe(n):
+            batch = {k: v.repeat((n,) + (1,) * (v.dim() - 1)) for k, v in ref.items()}
+            batch.update({k: v for k, v in ref_batch.items() if not isinstance(v, torch.Tensor)})
+            try:
+                loss, _ = accelerator.unwrap_model(policy).forward(batch)
+                accelerator.backward(loss)
+                optimizer.zero_grad(set_to_none=True)
+                torch.cuda.empty_cache()
+                return True
+            except torch.cuda.OutOfMemoryError:
+                optimizer.zero_grad(set_to_none=True)
+                torch.cuda.empty_cache()
+                return False
+
+        best_bs, bs = 1, 1
+        while _probe(bs):
+            logging.info(f"  batch_size={bs} OK")
+            best_bs, bs = bs, bs * 2
+
+        lo, hi = best_bs, bs
+        while hi - lo > 1:
+            mid = (lo + hi) // 2
+            if _probe(mid):
+                lo = mid
+            else:
+                hi = mid
+        best_bs = max(1, int(lo * 0.85))
+        logging.info(f"Max batch size: {best_bs} (probe max={lo}, after 0.85 safety, was cfg={cfg.batch_size})")
+
+        if best_bs != cfg.batch_size:
+            cfg.batch_size = best_bs
+            new_dl = torch.utils.data.DataLoader(
+                dataset,
+                num_workers=cfg.num_workers,
+                batch_size=cfg.batch_size,
+                shuffle=shuffle and not cfg.dataset.streaming,
+                sampler=sampler,
+                pin_memory=True,
+                drop_last=False,
+                prefetch_factor=2 if cfg.num_workers > 0 else None,
+            )
+            dataloader = accelerator.prepare(new_dl)
+            dl_iter = cycle(dataloader)
+
     policy.train()
 
     train_metrics = {
@@ -480,6 +534,9 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
 
         if is_log_step:
             logging.info(train_tracker)
+            log_entry = {"step": step, **train_tracker.to_dict()}
+            with open(cfg.output_dir / "loss_log.jsonl", "a") as f:
+                f.write(json.dumps(log_entry) + "\n")
             if wandb_logger:
                 wandb_log_dict = train_tracker.to_dict()
                 if output_dict:
