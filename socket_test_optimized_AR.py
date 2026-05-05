@@ -1,3 +1,4 @@
+import torch
 import dataclasses
 import logging
 import socket
@@ -7,7 +8,6 @@ import http
 import logging
 import time
 import traceback
-import torch
 import tyro
 from einops import rearrange
 import datetime

@@ -339,14 +339,22 @@ class GrootSimPolicy(BaseGrootSimPolicy):
         else:
             model.to(device=device)
 
-        # Post initialize, move RoPE freqs to cuda.
-        model.post_initialize()
+        # Post initialize: in lazy_load mode, use post_initialize_lazy to skip
+        # torch.compile and keep components on CPU for ultra-low-mem.
+        if lazy_load and hasattr(model, 'action_head') and hasattr(model.action_head, 'post_initialize_lazy'):
+            print("Using post_initialize_lazy (ultra-low-mem mode)")
+            model.action_head.post_initialize_lazy()
+        else:
+            model.post_initialize()
 
         # Parallelize the model across devices.
-        try:
-            model.parallelize(device_mesh=device_mesh)
-        except Exception as e:
-            print("Skipping parallelization")
+        if device_mesh is not None:
+            try:
+                model.parallelize(device_mesh=device_mesh)
+            except Exception as e:
+                print(f"Skipping parallelization: {e}")
+        else:
+            print("Skipping parallelization (no device_mesh)")
 
         torch.cuda.empty_cache()
 

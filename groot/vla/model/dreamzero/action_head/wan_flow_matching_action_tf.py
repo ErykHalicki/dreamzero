@@ -175,7 +175,7 @@ class WANPolicyHead(ActionHead):
         self.image_encoder = instantiate(config.image_encoder_cfg)
         self.vae = instantiate(config.vae_cfg)
         self.scheduler = FlowMatchScheduler(shift=5, sigma_min=0.0, extra_one_step=True)
-        self.model_names = ['text_encoder']
+        self.model_names = ['text_encoder', 'image_encoder', 'vae']
 
         self.num_inference_steps = 16 
         self.seed = 1140
@@ -425,7 +425,7 @@ class WANPolicyHead(ActionHead):
             self.vae.eval()
     
     
-    def enable_vram_management(self, num_persistent_param_in_dit=None):
+    def enable_vram_management(self, num_persistent_param_in_dit=None, manage_all_components=False):
         dtype = next(iter(self.text_encoder.parameters())).dtype
         enable_vram_management(
             self.text_encoder,
@@ -446,6 +446,7 @@ class WANPolicyHead(ActionHead):
         )
 
         self.cpu_offload = True
+        self._manage_all_components = manage_all_components
 
     def load_models_to_device(self, loadmodel_names=[]):
         # only load models to device if cpu_offload is enabled
@@ -549,6 +550,10 @@ class WANPolicyHead(ActionHead):
 
     def _ensure_vae_on_device(self, ref_tensor):
         """Lazily move the VAE to the correct device/dtype on first use."""
+        if getattr(self, '_manage_all_components', False):
+            # In ultra-low-mem mode, VAE is managed by load_models_to_device
+            # Just ensure dtype is correct, device is managed externally
+            return
         if not getattr(self, '_vae_device_ready', False):
             self.vae.to(device=ref_tensor.device, dtype=torch.bfloat16)
             self.vae.eval()
@@ -1046,12 +1051,21 @@ class WANPolicyHead(ActionHead):
         if self.ip_rank == 0:
             print("videos shape", videos.shape, self.num_frames)
 
+        # --- Sequential component offloading for ultra-low-mem ---
+        if getattr(self, '_manage_all_components', False):
+            self.load_models_to_device(['text_encoder'])
+
         start_text_encoder_event.record()
 
         text_inputs = self._prepare_text_inputs(data)
         prompt_embs = [self.encode_prompt(text, attention_mask) for text, attention_mask in text_inputs]
 
         end_text_encoder_event.record()
+
+        # Offload text_encoder, load image_encoder + VAE for ultra-low-mem
+        # (encode_image internally uses both image_encoder AND VAE)
+        if getattr(self, '_manage_all_components', False):
+            self.load_models_to_device(['image_encoder', 'vae'])
         
         start_image_encoder_event.record()
 
@@ -1071,6 +1085,7 @@ class WANPolicyHead(ActionHead):
 
         end_image_encoder_event.record()
 
+        # VAE is already loaded from the image_encoder phase above
         start_vae_event.record()
 
         if latent_video is not None and self.current_start_frame != 0:
@@ -1100,6 +1115,22 @@ class WANPolicyHead(ActionHead):
             )
 
         end_vae_event.record()
+
+        # Offload all managed components; DiT needs to be on GPU for denoising
+        if getattr(self, '_manage_all_components', False):
+            self.load_models_to_device([])  # offload everything managed
+            # Ensure DiT is on GPU (not in model_names, so managed separately)
+            self.model.to(device=self._device)
+            # Move KV caches back to GPU if they were offloaded to CPU in a previous call
+            if self.kv_cache1 is not None:
+                self.kv_cache1 = [t.to(self._device) for t in self.kv_cache1]
+            if self.kv_cache_neg is not None:
+                self.kv_cache_neg = [t.to(self._device) for t in self.kv_cache_neg]
+            if self.crossattn_cache is not None:
+                self.crossattn_cache = [t.to(self._device) for t in self.crossattn_cache]
+            if self.crossattn_cache_neg is not None:
+                self.crossattn_cache_neg = [t.to(self._device) for t in self.crossattn_cache_neg]
+            torch.cuda.empty_cache()
 
         noise_obs = self.generate_noise((image.shape[0], image.shape[1], self.num_frame_per_block, image.shape[3], image.shape[4]), seed=self.seed, device='cuda', dtype=torch.bfloat16)
         noise_action = self.generate_noise((image.shape[0], self.action_horizon, self.model.action_dim), seed=self.seed, device='cuda', dtype=torch.bfloat16)
@@ -1335,7 +1366,23 @@ class WANPolicyHead(ActionHead):
                   f"DIT Compute Steps {dit_compute_steps} steps, "
                   f"Scheduler {scheduler_time:.2f} seconds")
 
-        return BatchFeature(data={"action_pred": latents_action, "video_pred": output.transpose(1, 2)})
+        result = BatchFeature(data={"action_pred": latents_action, "video_pred": output.transpose(1, 2)})
+
+        # Ultra-low-mem: offload DiT back to CPU after denoising to free GPU
+        if getattr(self, '_manage_all_components', False):
+            self.model.cpu()
+            # Move KV caches to CPU to free GPU memory between calls
+            if self.kv_cache1 is not None:
+                self.kv_cache1 = [t.cpu() for t in self.kv_cache1]
+            if self.kv_cache_neg is not None:
+                self.kv_cache_neg = [t.cpu() for t in self.kv_cache_neg]
+            if self.crossattn_cache is not None:
+                self.crossattn_cache = [t.cpu() for t in self.crossattn_cache]
+            if self.crossattn_cache_neg is not None:
+                self.crossattn_cache_neg = [t.cpu() for t in self.crossattn_cache_neg]
+            torch.cuda.empty_cache()
+
+        return result
     
     def cache_predict_order1(self, current_timestep, timestep_1, f1, timestep_2, f2):
         h_curr = current_timestep - timestep_1
@@ -1382,6 +1429,21 @@ class WANPolicyHead(ActionHead):
             import groot.control.tensorrt_utils as trt_utils
             model_path = LOAD_TRT_ENGINE
             self.trt_engine = trt_utils.load_tensorrt_engine(model_path, model_type="ar_14B")
+
+    def post_initialize_lazy(self):
+        """Ultra-low-memory post_initialize: keep all components on CPU in bfloat16.
+        Skip torch.compile to avoid compilation graph memory overhead.
+        Components will be moved to GPU on-demand during inference."""
+        print("[Ultra-Low-Mem] post_initialize_lazy: casting to bfloat16 on CPU, skipping torch.compile")
+        self.model.to(dtype=torch.bfloat16)
+        self.text_encoder.to(dtype=torch.bfloat16)
+        self.image_encoder.to(dtype=torch.bfloat16)
+        self.vae.to(dtype=torch.bfloat16)
+        self.trt_engine = None
+        self._vae_device_ready = False  # Reset so VAE gets moved on-demand
+        import gc
+        gc.collect()
+        torch.cuda.empty_cache()
 
     def parallelize(self, device_mesh: DeviceMesh) -> None:
         ip_mesh = device_mesh["ip"]

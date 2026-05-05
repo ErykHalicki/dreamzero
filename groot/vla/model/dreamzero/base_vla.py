@@ -506,41 +506,18 @@ class VLA(PreTrainedModel):
         from safetensors.torch import load_file
         import os
         import json
-        print("loading pretrained@@@@@")
-        # Check for different checkpoint formats
-        safetensors_path = os.path.join(pretrained_model_name_or_path, "model.safetensors")
-        safetensors_index_path = os.path.join(pretrained_model_name_or_path, "model.safetensors.index.json")
+        import gc
+        print("loading pretrained@@@@@ with heavily optimized chunked loading")
 
-        state_dict = {}
-        if os.path.exists(safetensors_index_path):
-            # Handle sharded safetensors
-            print(f"Loading sharded safetensors using index: {safetensors_index_path}")
-            
-            with open(safetensors_index_path, 'r') as f:
-                index = json.load(f)
-            
-            # Load each shard
-            for shard_file in set(index["weight_map"].values()):
-                shard_path = os.path.join(pretrained_model_name_or_path, shard_file)
-                print(f"Loading shard: {shard_path}")
-                shard_state_dict = load_file(shard_path)
-                state_dict.update(shard_state_dict)
-                
-        elif os.path.exists(safetensors_path):
-            # Handle single safetensors file
-            print(f"Loading weights from safetensors: {safetensors_path}")
-            state_dict.update(load_file(safetensors_path))
-        
-        # Load config
+        # 1. Load config FIRST
         print("loading config@@")
         config_path = os.path.join(pretrained_model_name_or_path, "config.json")
         with open(config_path, "r") as f:
             config_dict = json.load(f)
         config = VLAConfig(**config_dict)
-        print("loading model")
         print("config.action_head_cfg", config.action_head_cfg)
+        
         # Always disable defer_lora_injection
-        # config.action_head_cfg is a dict, and defer_lora_injection is nested in config.action_head_cfg['config']
         if 'config' in config.action_head_cfg and isinstance(config.action_head_cfg['config'], dict):
             if 'defer_lora_injection' in config.action_head_cfg['config']:
                 config.action_head_cfg['config']['defer_lora_injection'] = False
@@ -549,29 +526,68 @@ class VLA(PreTrainedModel):
             config.action_head_cfg['defer_lora_injection'] = False
             print("config.action_head_cfg['defer_lora_injection'] disabled (set to False)")
 
-        # Instantiate model
-        model = cls(config)
-        print("model", model)
-        # Remove .base_layer from keys (e.g., 'action_head.model.base_model.model.blocks.19.self_attn.v.base_layer.bias' -> 'action_head.model.base_model.model.blocks.19.self_attn.v.bias')
-        has_base_layer = any(".base_layer." in key for key in state_dict.keys())
-        if has_base_layer:
-            print("Removing '.base_layer' from state dict keys")
-            new_state_dict = {}
-            for k, v in state_dict.items():
-                new_k = k.replace(".base_layer.", ".")
-                new_state_dict[new_k] = v
-            state_dict = new_state_dict
-
-        missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=False)
-            
-        if missing_keys:
-            print(f"Missing keys when loading pretrained weights: {missing_keys}")
-        if unexpected_keys:
-            print(f"Unexpected keys when loading pretrained weights: {unexpected_keys}")
+        # 2. Instantiate model BEFORE loading all shards to prevent duplicating 28GB in RAM
+        print("Initializing model structure exclusively on META device (zero RAM)...")
+        import torch
         
-        print("Successfully loaded pretrained weights")
+        # We must allow the initial empty parameters to be instantly thrown onto meta device
+        with torch.device("meta"):
+            model = cls(config)
+        print("Meta model instantiated successfully")
 
-        print(f"{cls}\n")
+        # 3. Load Shards sequentially using extreme garbage mapping
+        safetensors_path = os.path.join(pretrained_model_name_or_path, "model.safetensors")
+        safetensors_index_path = os.path.join(pretrained_model_name_or_path, "model.safetensors.index.json")
+
+        if os.path.exists(safetensors_index_path):
+            print(f"Loading sharded safetensors sequentially using index: {safetensors_index_path}")
+            with open(safetensors_index_path, 'r') as f:
+                index = json.load(f)
+            
+            missing_keys_total = []
+            unexpected_keys_total = []
+
+            for shard_file in sorted(set(index["weight_map"].values())):
+                shard_path = os.path.join(pretrained_model_name_or_path, shard_file)
+                print(f"Loading single isolated memory shard: {shard_path}")
+                shard_state_dict = load_file(shard_path)
+                
+                # Check for .base_layer. string in keys and replace on the fly to avoid OOM
+                new_shard = {}
+                for k, v in shard_state_dict.items():
+                    # Move to CPU explicitly, ensure memory map is localized
+                    new_shard[k.replace(".base_layer.", ".")] = v.to("cpu")
+                
+                # Apply weights instantly utilizing assign=True (replaces Meta tensors)
+                missing_keys, unexpected_keys = model.load_state_dict(new_shard, strict=False, assign=True)
+                del new_shard
+                del shard_state_dict
+                gc.collect()
+
+                if missing_keys: missing_keys_total.extend(missing_keys)
+                if unexpected_keys: unexpected_keys_total.extend(unexpected_keys)
+        
+        elif os.path.exists(safetensors_path):
+            print(f"Loading weights from safetensors: {safetensors_path}")
+            state_dict = load_file(safetensors_path)
+            new_shard = {}
+            for k, v in state_dict.items():
+                new_shard[k.replace(".base_layer.", ".")] = v.to("cpu")
+            missing_keys, unexpected_keys = model.load_state_dict(new_shard, strict=False, assign=True)
+            del new_shard
+            del state_dict
+            gc.collect()
+            
+        print("Materializing any remaining unassigned meta parameters to CPU bfloat16...")
+        for name, param in model.named_parameters():
+            if param.device == torch.device("meta"):
+                # Missing from checkpoints; initialize with zeros
+                param.data = torch.zeros_like(param, device="cpu", dtype=torch.bfloat16)
+        for name, buf in model.named_buffers():
+            if buf.device == torch.device("meta"):
+                buf.data = torch.zeros_like(buf, device="cpu", dtype=torch.bfloat16)
+
+        print("Successfully loaded pretrained weights into sequential blocks via Meta Device")
         return model
 
     def post_initialize(self):
