@@ -1,36 +1,29 @@
 #!/bin/bash
-#SBATCH --job-name=lerobot_convert
+#SBATCH --job-name=smolvla-train
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem-per-cpu=4096MB
 #SBATCH --time=24:00:00
+#SBATCH --gpus=1
 
-SCRATCH=/cluster/scratch/ehalicki
-DATASETS_FILE=$SCRATCH/lerobot_community_dataset/datasets.txt
-DATASET_ROOT=$SCRATCH/lerobot_community_dataset
-VENV=$LE_WAM_ROOT/.venv
+RUN_NAME=smolvla_finetune_bag_grocieries
+
+SMOLVLA_ROOT=/work/courses/3dv/team21/workspace/dreamzero/dreamdifferent/baseline/smolvla
+VENV=$SMOLVLA_ROOT/.venv
+DATASET_ROOT=/work/courses/3dv/team21/datasets/bag_groceries_v3/bag_groceries
 
 source $VENV/bin/activate
+cd $SMOLVLA_ROOT
+uv pip install -r requirements.txt
 
-mkdir -p $SCRATCH/logs
-
-RELATIVE_PATH=$(sed -n "$((SLURM_ARRAY_TASK_ID + 1))p" $DATASETS_FILE)
-
-if [ -z "$RELATIVE_PATH" ]; then
-    echo "No dataset for task $SLURM_ARRAY_TASK_ID"
-    exit 1
-fi
-
-DATASET_DIR=$DATASET_ROOT/$RELATIVE_PATH
-
-echo "Converting $RELATIVE_PATH (task $SLURM_ARRAY_TASK_ID)"
-
-python -m lerobot.datasets.v30.convert_dataset_v21_to_v30 \
-    --repo-id="$RELATIVE_PATH" \
-    --root="$DATASET_DIR" \
-    --push-to-hub=false
-
-echo "Done: $RELATIVE_PATH"
-
-# Submit with dynamic array size:
-# NUM=$(wc -l < /cluster/scratch/ehalicki/lerobot_community_dataset/datasets.txt) && sbatch --array=0-$((NUM - 1))%40 src/lewam/training/scripts/lerobot_conversion/convert_lerobot_v21_to_v30.sh
+lerobot-train \
+  --dataset.repo_id=ehalicki/eth-3dv-2026-bimanual-franka-grocery-bagging \
+  --dataset.root=$DATASET_ROOT \
+  --output_dir=./outputs/$RUN_NAME \
+  --job_name=$RUN_NAME \
+  --policy.repo_id=ehalicki/eth-3dv-2026-bimanual-franka-grocery-bagging-smolvla \
+  --policy.path=lerobot/smolvla_base \
+  --policy.dtype=bfloat16 \
+  --policy.device=cuda \
+  --steps=100000 \
+  --batch_size=1
