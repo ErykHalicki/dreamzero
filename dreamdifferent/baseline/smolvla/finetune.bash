@@ -9,6 +9,7 @@ DATASET_ROOT=/work/courses/3dv/team21/datasets/bag_groceries_v3/bag_groceries
 
 source $VENV/bin/activate
 cd $SMOLVLA_ROOT
+export LD_LIBRARY_PATH=$SMOLVLA_ROOT/.venv/lib/ffmpeg:$LD_LIBRARY_PATH
 uv pip install -r requirements.txt
 
 accelerate launch --mixed_precision=bf16 $SMOLVLA_ROOT/train.py \
