@@ -11,7 +11,7 @@ source $VENV/bin/activate
 cd $SMOLVLA_ROOT
 uv pip install -r requirements.txt
 
-accelerate launch --mixed_precision=bf16 $(which lerobot-train) \
+accelerate launch --mixed_precision=bf16 $SMOLVLA_ROOT/train.py \
   --dataset.repo_id=ehalicki/eth-3dv-2026-bimanual-franka-grocery-bagging \
   --dataset.root=$DATASET_ROOT \
   --output_dir=./outputs/$RUN_NAME \
