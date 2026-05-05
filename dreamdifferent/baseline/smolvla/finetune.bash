@@ -23,5 +23,5 @@ accelerate launch --mixed_precision=bf16 $SMOLVLA_ROOT/train.py \
   --policy.max_action_dim=48 \
   --policy.max_state_dim=48 \
   --rename_map='{"observation.images.aria_rgb_cam": "observation.images.camera1", "observation.images.oakd_front_view": "observation.images.camera2"}' \
-  --steps=100000 \
-  --batch_size=1
+  --steps=200000 \
+  --batch_size=16
