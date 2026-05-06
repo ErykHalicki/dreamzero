@@ -58,6 +58,36 @@ def _load_as_safetensor_skip_shape_mismatch(cls, model, model_file, map_location
 
 _pretrained.PreTrainedPolicy._load_as_safetensor = _load_as_safetensor_skip_shape_mismatch
 
+# Monkey-patch decode_video_frames_torchcodec to clamp frame indices to valid range,
+# avoiding an off-by-one IndexError when the last frame of a video is requested.
+import lerobot.datasets.video_utils as _video_utils
+_orig_decode_torchcodec = _video_utils.decode_video_frames_torchcodec
+
+def _decode_video_frames_torchcodec_clamped(video_path, timestamps, tolerance_s, *args, **kwargs):
+    import lerobot.datasets.video_utils as _vu
+    decoder_cache = kwargs.get("decoder_cache", None) or _vu._default_decoder_cache
+    decoder = decoder_cache.get_decoder(str(video_path))
+    num_frames = decoder.metadata.num_frames
+    orig_round = round
+    import builtins
+    _orig_round = builtins.round
+    import lerobot.datasets.video_utils as _mod
+    _orig_fn = _mod.decode_video_frames_torchcodec
+    average_fps = decoder.metadata.average_fps
+    clamped = [min(orig_round(ts * average_fps), num_frames - 1) for ts in timestamps]
+    # Temporarily patch round inside the module so indices get clamped
+    # Instead, just call the original but pre-clamp via a wrapper on get_frames_at
+    orig_get = decoder.get_frames_at
+    decoder.get_frames_at = lambda indices, **kw: orig_get(
+        indices=[min(i, num_frames - 1) for i in indices], **kw
+    )
+    try:
+        return _orig_decode_torchcodec(video_path, timestamps, tolerance_s, *args, **kwargs)
+    finally:
+        decoder.get_frames_at = orig_get
+
+_video_utils.decode_video_frames_torchcodec = _decode_video_frames_torchcodec_clamped
+
 from lerobot.configs import parser
 from lerobot.configs.train import TrainPipelineConfig
 from lerobot.datasets.factory import make_dataset
