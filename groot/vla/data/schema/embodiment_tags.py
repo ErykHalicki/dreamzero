@@ -4,6 +4,8 @@ from enum import Enum
 class EmbodimentTag(Enum):
     FRANKA = "franka"
 
+    SO101 = "so101"
+
     REAL_GR1_ARMS_ONLY = "real_gr1_arms_only"
     """
     The real GR1 robot embodiment with arms only.

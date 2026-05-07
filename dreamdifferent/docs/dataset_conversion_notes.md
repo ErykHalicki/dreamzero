@@ -31,6 +31,77 @@ One small problem, there is no LeRobot version < 0.3.2 published to pip anymore,
 
 Due to some dependency weirdness, directly installing from github doesnt work, so I've added the scipt `dreamdifferent/scripts/install_compatible_lerobot_linux.sh` (and macos version for local testing).
 
+### How to convert SO101 LeRobot v3 to DreamZero-compatible LeRobot v2.0?
+Added by Dohyung.
+
+The SO101 bottle dataset was collected with the newer LeRobot v3 format:
+
+```
+/workspace/datasets/so101_bottle
+```
+
+DreamZero currently expects the older episode-based LeRobot v2 layout, so convert it with:
+
+```bash
+/opt/miniforge3/bin/conda run -n dreamzero_data \
+  python dreamdifferent/scripts/so101_v3_to_lerobotv2.py \
+  --src /workspace/datasets/so101_bottle \
+  --dst /workspace/datasets/so101_bottle_lerobot_v2 \
+  --overwrite \
+  --validate
+```
+
+This keeps the v3 source dataset untouched and writes:
+
+```
+/workspace/datasets/so101_bottle_lerobot_v2
+```
+
+The converter does the following:
+- reads v3 episode metadata from `meta/episodes/**/*.parquet`
+- splits v3 shard parquet files into one v2 parquet per episode, e.g. `data/chunk-000/episode_000000.parquet`
+- cuts the concatenated v3 camera videos into one mp4 per episode under `videos/chunk-000/{video_key}/`
+- re-encodes video as h264 at 30 fps for accurate episode boundaries
+- adds `annotation.task` as an int64 task index so DreamZero can resolve language through `meta/tasks.jsonl`
+- writes DreamZero metadata: `modality.json`, `embodiment.json`, and `relative_stats_dreamzero.json`
+
+Expected output for the current SO101 bottle dataset:
+- `110` episode parquet files
+- `220` mp4 files (`front` and `wrist` for each episode)
+- `43095` total frames
+- task text: `pick up the bottle and place it into the container`
+
+The generated SO101 modality split is:
+
+```json
+{
+  "state": {
+    "joint_pos": [0, 5],
+    "gripper_pos": [5, 6]
+  },
+  "action": {
+    "joint_pos": [0, 5],
+    "gripper_pos": [5, 6]
+  },
+  "video": {
+    "front": "observation.images.front",
+    "wrist": "observation.images.wrist"
+  },
+  "annotation": {
+    "task": "annotation.task"
+  }
+}
+```
+
+For DreamZero training, use the added SO101 data config:
+
+```bash
+data=dreamzero/so101_relative \
+so101_data_root=/workspace/datasets/so101_bottle_lerobot_v2
+```
+
+Note: `dreamzero_data` currently has the converter dependencies, but not necessarily the full video backend used by training. If training uses `video_backend: decord`, make sure `decord` is installed in the actual training environment.
+
 ### How to convert from Egoverse .h5 to lerobot v2.0?
 Would it make sense to update the dreamzero repo to just use LeRobotDataset v3.0? 
 Probably not, the repo does not seem well organized, so the refactor would probably take a 5+ hours
