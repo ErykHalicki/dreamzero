@@ -21,6 +21,11 @@ LOCAL_CKPT_DIR="/tmp/pretrained_checkpoints"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 LOCAL_OUTPUT_DIR="/tmp/dreamzero_so101_bottle_lora_output_${TIMESTAMP}"
 
+# Optional resume source. Point this at either a previous output directory or a
+# specific checkpoint-* directory. The script copies it into the fresh /tmp run
+# directory so HuggingFace Trainer can auto-detect and resume.
+RESUME_FROM="${RESUME_FROM:-}"
+
 # Where to sync training output back to on Euler
 EULER_OUTPUT_DIR="/cluster/scratch/dohkim/training_output/dreamzero_so101_bottle_lora_${TIMESTAMP}"
 
@@ -70,6 +75,30 @@ OUTPUT_DIR="${LOCAL_OUTPUT_DIR}"
 
 mkdir -p "$OUTPUT_DIR"
 mkdir -p "$LOCAL_SHARED_OUTPUT_DIR"
+
+# ============ OPTIONAL RESUME ============
+if [ -n "$RESUME_FROM" ]; then
+    echo "=== Preparing resume from: $RESUME_FROM ==="
+
+    RESUME_BASENAME=$(basename "${RESUME_FROM%/}")
+    if [[ "$RESUME_BASENAME" == checkpoint-* ]]; then
+        mkdir -p "${OUTPUT_DIR}/${RESUME_BASENAME}"
+        rsync -a --update "${RESUME_FROM%/}/" "${OUTPUT_DIR}/${RESUME_BASENAME}/"
+    else
+        rsync -a --update "${RESUME_FROM%/}/" "${OUTPUT_DIR}/"
+    fi
+
+    LATEST_RESUME_CKPT=$(ls -td "${OUTPUT_DIR}"/checkpoint-* 2>/dev/null | head -1)
+    if [ -z "$LATEST_RESUME_CKPT" ]; then
+        echo "ERROR: RESUME_FROM did not provide any checkpoint-* directory"
+        exit 1
+    fi
+    if [ ! -f "${LATEST_RESUME_CKPT}/trainer_state.json" ]; then
+        echo "ERROR: ${LATEST_RESUME_CKPT}/trainer_state.json missing; cannot resume Trainer state"
+        exit 1
+    fi
+    echo "=== Resume checkpoint staged: $LATEST_RESUME_CKPT ==="
+fi
 
 # Copy this training script into the output dir for reproducibility
 SCRIPT_PATH="$(readlink -f "$0")"

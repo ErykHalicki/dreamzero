@@ -37,6 +37,7 @@ import transformers
 from transformers import TrainerCallback, set_seed
 from transformers.trainer import (
     # ALL_LAYERNORM_LAYERS,  # ShardedDDPOption,  # Removed deprecated import
+    SCHEDULER_NAME,
     TRAINER_STATE_NAME,
     TrainerState,
     get_last_checkpoint,
@@ -535,8 +536,31 @@ class BaseTrainer(transformers.Trainer):
                 mprint("WARNING: DeepSpeed version does not support exclude_frozen_parameters; "
                        "falling back to default save (may use significant memory)")
                 self.model_wrapped.save_checkpoint(output_dir)
+
+            if self.args.should_save and self.lr_scheduler is not None:
+                with warnings.catch_warnings(record=True):
+                    torch.save(
+                        self.lr_scheduler.state_dict(),
+                        os.path.join(output_dir, SCHEDULER_NAME),
+                    )
         else:
             super()._save_optimizer_and_scheduler(output_dir)
+
+    def _load_optimizer_and_scheduler(self, checkpoint):
+        if (
+            checkpoint is not None
+            and self.is_deepspeed_enabled
+            and self.base_cfg.save_lora_only
+            and not os.path.isfile(os.path.join(checkpoint, SCHEDULER_NAME))
+        ):
+            mprint(
+                f"Skipping HuggingFace scheduler load because "
+                f"{os.path.join(checkpoint, SCHEDULER_NAME)} is missing. "
+                "DeepSpeed checkpoint state was already loaded."
+            )
+            return
+
+        return super()._load_optimizer_and_scheduler(checkpoint)
 
     def train(
         self,
@@ -561,6 +585,37 @@ class BaseTrainer(transformers.Trainer):
             self.state = TrainerState.load_from_json(
                 os.path.join(resume_from_checkpoint, TRAINER_STATE_NAME)
             )
+
+        if (
+            resume_from_checkpoint is not None
+            and getattr(self.base_cfg, "save_lora_only", False)
+            and getattr(self.args, "deepspeed", None)
+        ):
+            import transformers.trainer as hf_trainer_module
+
+            original_deepspeed_load_checkpoint = hf_trainer_module.deepspeed_load_checkpoint
+
+            def load_lora_only_deepspeed_checkpoint(
+                deepspeed_engine,
+                checkpoint_path,
+                load_module_strict=True,
+            ):
+                mprint(
+                    "DeepSpeed resume with load_module_strict=False "
+                    "(LoRA-only checkpoint)"
+                )
+                return original_deepspeed_load_checkpoint(
+                    deepspeed_engine,
+                    checkpoint_path,
+                    load_module_strict=False,
+                )
+
+            hf_trainer_module.deepspeed_load_checkpoint = load_lora_only_deepspeed_checkpoint
+            try:
+                return super().train(resume_from_checkpoint, trial, ignore_keys_for_eval, **kwargs)
+            finally:
+                hf_trainer_module.deepspeed_load_checkpoint = original_deepspeed_load_checkpoint
+
         return super().train(resume_from_checkpoint, trial, ignore_keys_for_eval, **kwargs)
 
     def get_train_dataloader(self) -> DataLoader:
