@@ -177,9 +177,7 @@ def precise_sleep(duration_s: float) -> None:
         lerobot_precise_sleep(max(duration_s, 0.0))
 
 
-def resize_with_pad_uint8(image: Any, target_size: int) -> np.ndarray:
-    from PIL import Image
-
+def image_to_uint8(image: Any) -> np.ndarray:
     arr = np.asarray(image)
     if arr.ndim != 3:
         raise ValueError(f"Expected image with 3 dimensions, got shape {arr.shape}")
@@ -190,6 +188,13 @@ def resize_with_pad_uint8(image: Any, target_size: int) -> np.ndarray:
     if np.issubdtype(arr.dtype, np.floating):
         arr = np.clip(arr, 0.0, 1.0) * 255.0
     arr = arr.astype(np.uint8, copy=False)
+    return arr
+
+
+def resize_with_pad_uint8(image: Any, target_size: int) -> np.ndarray:
+    from PIL import Image
+
+    arr = image_to_uint8(image)
 
     height, width = arr.shape[:2]
     if (height, width) == (target_size, target_size):
@@ -222,6 +227,7 @@ def build_policy_observation(
     front_camera_name: str,
     wrist_camera_name: str,
     image_size: int,
+    resize_images: bool,
 ) -> dict[str, Any]:
     missing_cameras = [name for name in (front_camera_name, wrist_camera_name) if name not in robot_observation]
     if missing_cameras:
@@ -230,9 +236,11 @@ def build_policy_observation(
             f"{missing_cameras}. Available keys: {sorted(robot_observation.keys())}"
         )
 
+    image_fn = functools.partial(resize_with_pad_uint8, target_size=image_size) if resize_images else image_to_uint8
+
     return {
-        "observation/images/front": resize_with_pad_uint8(robot_observation[front_camera_name], image_size),
-        "observation/images/wrist": resize_with_pad_uint8(robot_observation[wrist_camera_name], image_size),
+        "observation/images/front": image_fn(robot_observation[front_camera_name]),
+        "observation/images/wrist": image_fn(robot_observation[wrist_camera_name]),
         "observation/state": extract_state(robot_observation),
         "prompt": prompt,
     }
@@ -347,6 +355,7 @@ def infer_from_robot_observation(
         front_camera_name=args.secondary_camera_name,
         wrist_camera_name=args.camera_name,
         image_size=args.image_size,
+        resize_images=args.resize_images,
     )
     maybe_dump_first_policy_observation(policy_observation, args)
     return client.infer(policy_observation, args.server_action_horizon)
@@ -494,7 +503,7 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("--fps must be positive")
     if args.camera_fps <= 0:
         raise ValueError("--camera-fps must be positive")
-    if args.image_size <= 0:
+    if args.resize_images and args.image_size <= 0:
         raise ValueError("--image-size must be positive")
     if not (args.camera and args.secondary_camera):
         raise ValueError("Both --camera and --secondary-camera are required for the SO101 OpenPI policy")
@@ -515,6 +524,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--chunk-size-threshold", type=float, default=0.9)
     parser.add_argument("--queue-update-mode", choices=("replace", "append"), default="replace")
     parser.add_argument("--image-size", type=int, default=224)
+    parser.add_argument(
+        "--resize-images",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Resize/pad camera images to --image-size before sending them to the policy server.",
+    )
     parser.add_argument("--max-relative-target", type=float, default=10.0, help="<=0 disables client-side clamping")
     parser.add_argument("--dry-run", action="store_true", help="Run inference but do not send actions to the robot")
     parser.add_argument("--enter-gate", action=argparse.BooleanOptionalAction, default=True)
