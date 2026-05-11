@@ -4,6 +4,7 @@ Adapted from https://github.com/robo-arena/roboarena/
 
 """
 
+import inspect
 import logging
 import time
 from typing import Dict, Tuple
@@ -36,29 +37,31 @@ class WebsocketClientPolicy(BasePolicy):
     def get_server_metadata(self) -> Dict:
         return self._server_metadata
 
+    def _connect(self, uri: str):
+        connect_kwargs = {
+            "compression": None,
+            "max_size": None,
+        }
+        connect_sig = inspect.signature(websockets.sync.client.connect)
+        if "ping_interval" in connect_sig.parameters:
+            connect_kwargs["ping_interval"] = PING_INTERVAL_SECS
+        else:
+            logging.info("websockets.connect() has no ping_interval parameter; using library defaults.")
+        if "ping_timeout" in connect_sig.parameters:
+            connect_kwargs["ping_timeout"] = PING_TIMEOUT_SECS
+        return websockets.sync.client.connect(uri, **connect_kwargs)
+
     def _wait_for_server(self) -> Tuple[websockets.sync.client.ClientConnection, Dict]:
         logging.info(f"Waiting for server at {self._uri}...")
         try:
-            conn = websockets.sync.client.connect(
-                self._uri, 
-                compression=None, 
-                max_size=None,
-                ping_interval=PING_INTERVAL_SECS,
-                ping_timeout=PING_TIMEOUT_SECS,
-            )
+            conn = self._connect(self._uri)
             metadata = msgpack_numpy.unpackb(conn.recv())
             return conn, metadata
-        except:
+        except Exception:
             logging.info("Connection to server with ws:// failed. Trying wss:// ...")
-            
+
         self._uri = "wss://" + self._uri.split("//")[1]
-        conn = websockets.sync.client.connect(
-            self._uri, 
-            compression=None, 
-            max_size=None,
-            ping_interval=PING_INTERVAL_SECS,
-            ping_timeout=PING_TIMEOUT_SECS,
-        )
+        conn = self._connect(self._uri)
         metadata = msgpack_numpy.unpackb(conn.recv())
         return conn, metadata
 

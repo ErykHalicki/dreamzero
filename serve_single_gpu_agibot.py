@@ -134,7 +134,9 @@ class SingleGPUAgibotPolicy:
     frame accumulation, and action format conversion.
     """
 
-    FRAMES_PER_CHUNK = 4
+    # Agibot runtime uses K=2 latent frames per chunk. Keep this isolated to
+    # the Agibot server path so Franka/DROID behavior stays unchanged.
+    FRAMES_PER_CHUNK = 2
 
     def __init__(self, groot_policy: GrootSimPolicy, output_dir: str | None = None) -> None:
         self._policy = groot_policy
@@ -195,20 +197,24 @@ class SingleGPUAgibotPolicy:
 
     def _convert_action(self, action_dict: dict) -> np.ndarray:
         parts = []
+        debug_shapes: list[str] = []
         for key in _ACTION_KEY_ORDER:
             val = action_dict.get(key)
             if val is None:
                 logger.warning("Action key '%s' missing from model output", key)
                 return np.zeros((1, 22), dtype=np.float32)
+            raw_shape = tuple(val.shape) if hasattr(val, "shape") else None
             if isinstance(val, torch.Tensor):
                 val = val.cpu().numpy()
             # Normalize to 2D (T, dim): squeeze batch dim if 3D, expand if 0D/1D.
             if val.ndim == 3:
                 val = val.squeeze(0)   # (1, T, dim) -> (T, dim)
             elif val.ndim == 1:
-                val = val.reshape(1, -1)
+                # Scalar horizons arrive as (T,), so keep time on axis 0.
+                val = val.reshape(-1, 1)
             elif val.ndim == 0:
                 val = val.reshape(1, 1)
+            debug_shapes.append(f"{key}: raw={raw_shape} normalized={tuple(val.shape)}")
             parts.append(val)
 
         # Some keys may predict only 1 step while others predict the full horizon.
@@ -220,7 +226,20 @@ class SingleGPUAgibotPolicy:
                 for p in parts
             ]
 
-        return np.concatenate(parts, axis=-1).astype(np.float32)
+        action = np.concatenate(parts, axis=-1).astype(np.float32)
+        logger.info(
+            "[Agibot server action shapes] %s | max_t=%d final_shape=%s",
+            " ; ".join(debug_shapes),
+            max_t,
+            tuple(action.shape),
+        )
+        if action.shape[-1] != 22:
+            logger.warning(
+                "[Agibot server action unexpected dim] expected=22 got=%d final_shape=%s",
+                action.shape[-1],
+                tuple(action.shape),
+            )
+        return action
 
     def infer(self, obs: dict) -> np.ndarray:
         session_id = obs.get("session_id")

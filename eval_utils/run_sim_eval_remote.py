@@ -1,27 +1,16 @@
 """
-Example script for running 10 rollouts of a DROID policy on the example environment.
+Run DROID policy evaluation against a remote policy server (e.g. Cloudflare tunnel).
 
 Usage:
 
-First, make sure you download the simulation assets and unpack them into the root directory of this package.
-
-Then, in a separate terminal, launch the policy server on localhost:8000 
--- make sure to set XLA_PYTHON_CLIENT_MEM_FRACTION to avoid JAX hogging all the GPU memory.
-
-For example, to launch a pi0-FAST-DROID policy (with joint position control), 
-run the command below in a separate terminal from the openpi "karl/droid_policies" branch:
-
-XLA_PYTHON_CLIENT_MEM_FRACTION=0.5 uv run scripts/serve_policy.py policy:checkpoint --policy.config=pi0_fast_droid_jointpos --policy.dir=s3://openpi-assets-simeval/pi0_fast_droid_jointpos
-
-Finally, run the evaluation script:
-
-python run_eval.py --episodes 10 --headless
+    python run_sim_eval_remote.py --url https://xxx.trycloudflare.com --episodes 10 --scene 1 --headless
 """
 
 import json
 import os
 import time
 import uuid
+import logging
 
 import tyro
 import argparse
@@ -30,41 +19,72 @@ import torch
 import cv2
 import mediapy
 import numpy as np
+import websockets.sync.client
 from datetime import datetime
 from pathlib import Path
 from PIL import Image
 from tqdm import tqdm
 
-from openpi_client import image_tools
+from openpi_client import image_tools, msgpack_numpy
 from sim_evals.inference.abstract_client import InferenceClient
-from policy_client import WebsocketClientPolicy
+
+PING_INTERVAL_SECS = 60
+PING_TIMEOUT_SECS = 600
 
 
-def _show_viz_frame(window_name: str, frame: np.ndarray, show_viz: bool) -> bool:
-    """Best-effort OpenCV display that disables itself if GUI support is unavailable."""
-    if not show_viz:
-        return False
+class RemoteWebsocketClient:
+    """WebSocket client that supports both ws:// and wss:// (Cloudflare tunnel) URLs."""
 
-    try:
-        cv2.imshow(window_name, cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
-        cv2.waitKey(1)
-        return True
-    except cv2.error as exc:
-        print(
-            "OpenCV GUI is unavailable; continuing without live visualization. "
-            f"Original error: {exc}"
+    def __init__(self, url: str) -> None:
+        self._packer = msgpack_numpy.Packer()
+
+        # Normalize URL to wss:// for https, ws:// for others
+        url = url.rstrip("/")
+        if url.startswith("https://"):
+            self._uri = "wss://" + url[len("https://"):]
+        elif url.startswith("http://"):
+            self._uri = "ws://" + url[len("http://"):]
+        elif not url.startswith("ws://") and not url.startswith("wss://"):
+            self._uri = "wss://" + url
+        else:
+            self._uri = url
+
+        logging.info(f"Connecting to {self._uri}...")
+        self._ws = websockets.sync.client.connect(
+            self._uri,
+            compression=None,
+            max_size=None,
+            ping_interval=PING_INTERVAL_SECS,
+            ping_timeout=PING_TIMEOUT_SECS,
         )
-        return False
+        self._server_metadata = msgpack_numpy.unpackb(self._ws.recv())
+
+    def get_server_metadata(self):
+        return self._server_metadata
+
+    def infer(self, obs: dict) -> dict:
+        obs["endpoint"] = "infer"
+        data = self._packer.pack(obs)
+        self._ws.send(data)
+        response = self._ws.recv()
+        if isinstance(response, str):
+            raise RuntimeError(f"Error in inference server:\n{response}")
+        return msgpack_numpy.unpackb(response)
+
+    def reset(self, reset_info: dict) -> None:
+        reset_info["endpoint"] = "reset"
+        data = self._packer.pack(reset_info)
+        self._ws.send(data)
+        self._ws.recv()
 
 
 class DreamZeroJointPosClient(InferenceClient):
-    def __init__(self, 
-                remote_host:str = "localhost", 
-                remote_port:int = 6000,
-                open_loop_horizon:int = 8,
+    def __init__(self,
+                url: str,
+                open_loop_horizon: int = 8,
                 debug_dump_dir: str | None = None,
     ) -> None:
-        self.client = WebsocketClientPolicy(remote_host, remote_port)
+        self.client = RemoteWebsocketClient(url)
         self.open_loop_horizon = open_loop_horizon
         self.actions_from_chunk_completed = 0
         self.pred_action_chunk = None
@@ -86,7 +106,7 @@ class DreamZeroJointPosClient(InferenceClient):
             "observation/wrist_image_left": "wrist",
         }
         file_prefixes = {
-            image_name: f"franka_local_infer_{image_name}_{idx:04d}"
+            image_name: f"franka_remote_infer_{image_name}_{idx:04d}"
             for image_name in image_key_to_name.values()
         }
         for payload_key, image_name in image_key_to_name.items():
@@ -97,7 +117,7 @@ class DreamZeroJointPosClient(InferenceClient):
                 str(self.debug_dump_dir / f"{file_prefixes[image_name]}.png"),
                 cv2.cvtColor(np.asarray(image), cv2.COLOR_RGB2BGR),
             )
-        with open(self.debug_dump_dir / "franka_local_meta.jsonl", "a", encoding="utf-8") as f:
+        with open(self.debug_dump_dir / "franka_remote_meta.jsonl", "a", encoding="utf-8") as f:
             f.write(
                 json.dumps(
                     {
@@ -112,9 +132,6 @@ class DreamZeroJointPosClient(InferenceClient):
             )
 
     def visualize(self, request: dict):
-        """
-        Return the camera views how the model sees it
-        """
         curr_obs = self._extract_observation(request)
         right_img = image_tools.resize_with_pad(curr_obs["right_image"], 224, 224)
         wrist_img = image_tools.resize_with_pad(curr_obs["wrist_image"], 224, 224)
@@ -128,9 +145,6 @@ class DreamZeroJointPosClient(InferenceClient):
         self.session_id = str(uuid.uuid4())
 
     def infer(self, obs: dict, instruction: str) -> dict:
-        """
-        Infer the next action from the policy in a server-client setup
-        """
         curr_obs = self._extract_observation(obs)
         if (
             self.actions_from_chunk_completed == 0
@@ -142,7 +156,7 @@ class DreamZeroJointPosClient(InferenceClient):
                 "observation/exterior_image_1_left": image_tools.resize_with_pad(curr_obs["left_image"], 180, 320),
                 "observation/wrist_image_left": image_tools.resize_with_pad(curr_obs["wrist_image"], 180, 320),
                 "observation/joint_position": curr_obs["joint_position"].astype(np.float64),
-                "observation/cartesian_position": np.zeros((6,), dtype=np.float64),  # dummy cartesian position
+                "observation/cartesian_position": np.zeros((6,), dtype=np.float64),
                 "observation/gripper_position": curr_obs["gripper_position"].astype(np.float64),
                 "prompt": instruction,
                 "session_id": self.session_id,
@@ -157,7 +171,6 @@ class DreamZeroJointPosClient(InferenceClient):
             assert len(actions.shape) == 2, f"Expected 2D array, got shape {actions.shape}"
             assert actions.shape[-1] == 8, f"Expected 8 action dimensions (7 joints + 1 gripper), got {actions.shape[-1]}"
             self.pred_action_chunk = actions
-
 
         action = self.pred_action_chunk[self.actions_from_chunk_completed]
         self.actions_from_chunk_completed += 1
@@ -176,12 +189,10 @@ class DreamZeroJointPosClient(InferenceClient):
         return {"action": action, "viz": both}
 
     def _extract_observation(self, obs_dict, *, save_to_disk=False):
-        # Assign images
         right_image = obs_dict["policy"]["external_cam"][0].clone().detach().cpu().numpy()
         left_image = obs_dict["policy"]["external_cam_2"][0].clone().detach().cpu().numpy()
         wrist_image = obs_dict["policy"]["wrist_cam"][0].clone().detach().cpu().numpy()
 
-        # Capture proprioceptive state
         robot_state = obs_dict["policy"]
         joint_position = robot_state["arm_joint_pos"].clone().detach().cpu().numpy()
         gripper_position = robot_state["gripper_pos"].clone().detach().cpu().numpy()
@@ -200,14 +211,11 @@ class DreamZeroJointPosClient(InferenceClient):
         }
 
 
-
-
 def main(
         episodes: int = 10,
         scene: int = 1,
         headless: bool = True,
-        host: str = "localhost",
-        port: int = 6000,
+        url: str = "https://example.trycloudflare.com",
         ):
     # launch omniverse app with arguments (inside function to prevent overriding tyro)
     from isaaclab.app import AppLauncher
@@ -222,7 +230,6 @@ def main(
     # All IsaacLab dependent modules should be imported after the app is launched
     import sim_evals.environments # noqa: F401
     from isaaclab_tasks.utils import parse_env_cfg
-
 
     # Initialize the env
     env_cfg = parse_env_cfg(
@@ -241,27 +248,27 @@ def main(
             instruction = "put the banana in the bin"
         case _:
             raise ValueError(f"Scene {scene} not supported")
-        
+
     env_cfg.set_scene(scene)
     env = gym.make("DROID", cfg=env_cfg)
 
     obs, _ = env.reset()
     obs, _ = env.reset() # need second render cycle to get correctly loaded materials
-    client = DreamZeroJointPosClient(remote_host=host, remote_port=port)
-
+    client = DreamZeroJointPosClient(url=url)
+    print(f"Server metadata: {client.client.get_server_metadata()}")
 
     video_dir = Path("runs") / datetime.now().strftime("%Y-%m-%d") / datetime.now().strftime("%H-%M-%S")
     video_dir.mkdir(parents=True, exist_ok=True)
     video = []
     ep = 0
     max_steps = env.env.max_episode_length
-    show_viz = not headless
     with torch.no_grad():
         for ep in range(episodes):
             for _ in tqdm(range(max_steps), desc=f"Episode {ep+1}/{episodes}"):
                 ret = client.infer(obs, instruction)
-                if show_viz:
-                    show_viz = _show_viz_frame("Right Camera", ret["viz"], show_viz)
+                if not headless:
+                    cv2.imshow("Right Camera", cv2.cvtColor(ret["viz"], cv2.COLOR_RGB2BGR))
+                    cv2.waitKey(1)
                 video.append(ret["viz"])
                 action = torch.tensor(ret["action"])[None]
                 obs, _, term, trunc, _ = env.step(action)
@@ -277,11 +284,6 @@ def main(
             video = []
 
     env.close()
-    if show_viz:
-        try:
-            cv2.destroyAllWindows()
-        except cv2.error:
-            pass
     simulation_app.close()
 
 if __name__ == "__main__":
