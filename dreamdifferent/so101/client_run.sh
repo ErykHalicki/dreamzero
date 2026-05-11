@@ -13,12 +13,12 @@
 python scripts/openpi_policy_client.py \
   --host 127.0.0.1 \
   --port 23261 \
-  --prompt "pick up the shuttlecock and place it into the container" \
+  --prompt "pick up the bottle and place it into the container" \
   --mode sync \
   --fps 12 \
   --camera-fps 30 \
   --duration-sec 120 \
-  --execute-actions-per-chunk 3 \
-  --max-relative-target 3 \
+  --execute-actions-per-chunk 24 \
+  --max-relative-target 0 \
   --no-resize-images \
   --debug-dump-observation
