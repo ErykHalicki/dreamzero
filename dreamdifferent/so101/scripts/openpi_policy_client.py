@@ -96,7 +96,12 @@ class OpenPIWebsocketClient:
     def __init__(self, host: str, port: int) -> None:
         self.uri = host if host.startswith("ws") else f"ws://{host}:{port}"
         logging.info("Connecting to OpenPI policy server at %s", self.uri)
-        self.websocket = websockets.sync.client.connect(self.uri, compression=None, max_size=None)
+        self.websocket = websockets.sync.client.connect(
+            self.uri,
+            compression=None,
+            max_size=None,
+            ping_interval=None,
+        )
         self.metadata = _unpackb(self.websocket.recv())
 
     def infer(self, observation: dict[str, Any], server_action_horizon: int) -> PolicyResult:

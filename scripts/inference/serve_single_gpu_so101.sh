@@ -10,7 +10,8 @@
 #       --port 23261 \
 #       --cuda-device 0 \
 #       --tokenizer-path /tmp/pretrained_checkpoints/umt5-xxl \
-#       --enable-dit-cache
+#       --enable-dit-cache \
+#       --enable-torch-compile
 
 set -euo pipefail
 
@@ -26,6 +27,7 @@ LOCAL_CKPT_DIR="${LOCAL_CKPT_DIR:-/tmp/pretrained_checkpoints}"
 TOKENIZER_PATH="${TOKENIZER_PATH:-${LOCAL_CKPT_DIR}/umt5-xxl}"
 WAN_CKPT_DIR="${WAN_CKPT_DIR:-${LOCAL_CKPT_DIR}/Wan2.1-I2V-14B-480P}"
 ENABLE_DIT_CACHE=false
+ENABLE_TORCH_COMPILE="${ENABLE_TORCH_COMPILE:-false}"
 
 # --------------------------------------------------------------------------- #
 # Argument parsing
@@ -37,6 +39,7 @@ while [[ $# -gt 0 ]]; do
         --cuda-device)      CUDA_DEVICE="$2"; shift 2 ;;
         --tokenizer-path)   TOKENIZER_PATH="$2"; shift 2 ;;
         --enable-dit-cache) ENABLE_DIT_CACHE=true; shift ;;
+        --enable-torch-compile) ENABLE_TORCH_COMPILE=true; shift ;;
         -h|--help)
             echo "Usage: $0 [OPTIONS]"
             echo ""
@@ -46,6 +49,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --cuda-device ID        CUDA device index (default: 0)"
             echo "  --tokenizer-path PATH   Tokenizer path (default: /tmp/pretrained_checkpoints/umt5-xxl)"
             echo "  --enable-dit-cache      Enable DiT KV-cache (faster but more VRAM)"
+            echo "  --enable-torch-compile  Enable torch.compile for Wan submodules (disabled by default)"
             exit 0
             ;;
         *)
@@ -125,6 +129,11 @@ fi
 export CUDA_VISIBLE_DEVICES="$CUDA_DEVICE"
 export ATTENTION_BACKEND="torch"
 export HYDRA_FULL_ERROR=1
+if [[ "$ENABLE_TORCH_COMPILE" == "true" ]]; then
+    export DISABLE_TORCH_COMPILE=false
+else
+    export DISABLE_TORCH_COMPILE=true
+fi
 export HF_HOME="${HF_HOME:-/tmp/huggingface_${USER}}"
 export HF_HUB_CACHE="${HF_HUB_CACHE:-${HF_HOME}/hub}"
 export TRITON_CACHE_DIR="${TRITON_CACHE_DIR:-/tmp/triton_${USER}}"
@@ -160,6 +169,7 @@ echo "  Port        : $PORT"
 echo "  CUDA device : $CUDA_DEVICE"
 echo "  Tokenizer   : $TOKENIZER_PATH"
 echo "  DiT cache   : $ENABLE_DIT_CACHE"
+echo "  Torch compile: $ENABLE_TORCH_COMPILE"
 echo "=========================================="
 
 # Set distributed env vars manually (avoids torchrun subprocess spawn which

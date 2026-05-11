@@ -16,6 +16,10 @@ import time
 import traceback
 from typing import Any
 
+# Keep SO101 serving on eager PyTorch by default. The GB10 path is sensitive to
+# Dynamo/Triton compile caches, and the wrapper can opt back in via env.
+os.environ.setdefault("DISABLE_TORCH_COMPILE", "true")
+
 import imageio
 import msgpack
 import numpy as np
@@ -333,6 +337,7 @@ class SO101WebsocketServer:
             self._port,
             compression=None,
             max_size=None,
+            ping_interval=None,
         ) as server:
             await server.serve_forever()
 
@@ -349,7 +354,8 @@ class SO101WebsocketServer:
                     await websocket.send("reset successful")
                     continue
 
-                await websocket.send(_packb(self._policy.infer(obs)))
+                result = await asyncio.to_thread(self._policy.infer, obs)
+                await websocket.send(_packb(result))
             except websockets.ConnectionClosed:
                 logger.info("SO101 connection from %s closed", websocket.remote_address)
                 break
@@ -369,7 +375,8 @@ def main(args: Args) -> None:
     # PyTorch native SDPA — FlashAttention/TE may not support GB10 (cc 12.1)
     os.environ["ATTENTION_BACKEND"] = "torch"
 
-    torch._dynamo.config.recompile_limit = 800
+    if os.environ.get("DISABLE_TORCH_COMPILE", "true").lower() != "true":
+        torch._dynamo.config.recompile_limit = 800
 
     _init_single_gpu()
     device_mesh = init_device_mesh("cuda", mesh_shape=(1,), mesh_dim_names=("ip",))

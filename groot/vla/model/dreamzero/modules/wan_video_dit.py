@@ -48,7 +48,7 @@ if ENABLE_TENSORRT:
     FLASH_ATTN_COMPATIBILITY_MODE = True
     DISABLE_TORCH_COMPILE = True
 else:
-    DISABLE_TORCH_COMPILE = False
+    DISABLE_TORCH_COMPILE = os.getenv("DISABLE_TORCH_COMPILE", "False").lower() == "true"
     FLASH_ATTN_COMPATIBILITY_MODE = False
 def flash_attention(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, num_heads: int, compatibility_mode=False):
     # Use PyTorch SDPA on pre-Ampere GPUs or when compatibility_mode (FlashAttention requires Ampere or newer)
