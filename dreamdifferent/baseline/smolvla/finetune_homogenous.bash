@@ -19,7 +19,6 @@ accelerate launch --mixed_precision=bf16 $SMOLVLA_ROOT/train.py \
   --job_name=$RUN_NAME \
   --policy.repo_id=ehalicki/$RUN_NAME \
   --policy.path=lerobot/smolvla_base \
-  --policy.type=smolvla \
   --policy.device=cuda \
   --rename_map='{"observation.images.wrist": "observation.images.camera1", "observation.images.front": "observation.images.camera2"}' \
   --tolerance_s=0.04 \
