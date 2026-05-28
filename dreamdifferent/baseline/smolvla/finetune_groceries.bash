@@ -15,7 +15,7 @@ uv pip install -r requirements.txt
 accelerate launch --mixed_precision=bf16 $SMOLVLA_ROOT/train.py \
   --dataset.repo_id=ehalicki/eth-3dv-2026-bimanual-franka-grocery-bagging \
   --dataset.root=$DATASET_ROOT \
-  --output_dir=/work/scratch/ehalicki/$RUN_NAME \
+  --output_dir=/home/ehalicki/$RUN_NAME \
   --job_name=$RUN_NAME \
   --policy.repo_id=ehalicki/eth-3dv-2026-bimanual-franka-grocery-bagging-smolvla \
   --config_path=/work/scratch/ehalicki/smolvla_finetune_bag_grocieries/checkpoints/last/pretrained_model/train_config.json \
