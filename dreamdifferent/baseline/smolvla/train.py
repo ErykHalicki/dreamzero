@@ -23,6 +23,41 @@ from typing import Any
 
 import torch
 from accelerate import Accelerator
+
+IMAGE_KEY_PREFIX = "observation.images."
+AUG_BRIGHTNESS = (0.7, 1.3)
+AUG_CONTRAST = (0.8, 1.2)
+AUG_SATURATION = (0.8, 1.2)
+AUG_HUE = (-0.05, 0.05)
+
+
+def apply_image_augmentations(batch: Any) -> Any:
+    from torchvision.transforms.v2 import functional as TF
+
+    for key, val in list(batch.items()):
+        if not key.startswith(IMAGE_KEY_PREFIX) or not isinstance(val, torch.Tensor):
+            continue
+        if val.ndim == 3:
+            imgs = val.unsqueeze(0)
+            squeeze = True
+        elif val.ndim == 4:
+            imgs = val
+            squeeze = False
+        else:
+            continue
+
+        out = torch.empty_like(imgs)
+        for i in range(imgs.shape[0]):
+            img = imgs[i]
+            img = TF.adjust_brightness(img, float(torch.empty(1).uniform_(*AUG_BRIGHTNESS)))
+            img = TF.adjust_contrast(img, float(torch.empty(1).uniform_(*AUG_CONTRAST)))
+            img = TF.adjust_saturation(img, float(torch.empty(1).uniform_(*AUG_SATURATION)))
+            img = TF.adjust_hue(img, float(torch.empty(1).uniform_(*AUG_HUE)))
+            out[i] = img.clamp(0.0, 1.0) if img.is_floating_point() else img
+
+        batch[key] = out.squeeze(0) if squeeze else out
+    return batch
+
 from termcolor import colored
 from torch.optim import Optimizer
 from tqdm import tqdm
@@ -538,6 +573,7 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
     for _ in range(step, cfg.steps):
         start_time = time.perf_counter()
         batch = next(dl_iter)
+        batch = apply_image_augmentations(batch)
         batch = preprocessor(batch)
         train_tracker.dataloading_s = time.perf_counter() - start_time
 
