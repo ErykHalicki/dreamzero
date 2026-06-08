@@ -24,6 +24,6 @@ accelerate launch --mixed_precision=bf16 $SMOLVLA_ROOT/train.py \
   --tolerance_s=0.04 \
   --num_workers=2 \
   --log_freq=1 \
-  --save_freq=5000 \
+  --save_freq=1000 \
   --steps=50000 \
   --batch_size=62

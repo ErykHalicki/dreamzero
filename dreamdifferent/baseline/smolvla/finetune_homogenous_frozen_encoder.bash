@@ -15,7 +15,7 @@ uv pip install -r requirements.txt
 accelerate launch --mixed_precision=bf16 $SMOLVLA_ROOT/train.py \
   --dataset.repo_id=dreamdifferent/so101_bottle \
   --dataset.root=$DATASET_ROOT \
-  --output_dir=/home/ehalicki/$RUN_NAME \
+  --output_dir=/work/scratch/ehalicki/$RUN_NAME \
   --job_name=$RUN_NAME \
   --policy.repo_id=ehalicki/$RUN_NAME \
   --policy.path=lerobot/smolvla_base \
@@ -26,6 +26,6 @@ accelerate launch --mixed_precision=bf16 $SMOLVLA_ROOT/train.py \
   --tolerance_s=0.04 \
   --num_workers=2 \
   --log_freq=1 \
-  --save_freq=5000 \
+  --save_freq=1000 \
   --steps=50000 \
   --batch_size=62
