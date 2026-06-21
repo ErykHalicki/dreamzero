@@ -228,19 +228,6 @@ If you can reserve an A100, batch size 32 should be much safer. Adjust the GPU n
 sbatch --gpus=a100:1 --export=ALL,BATCH_SIZE=32,COMPILE_MODEL=true train.sh
 ```
 
-## Memory Notes
-
-The failed 4090 batch-size-32 run reached about 23 GB allocated/reserved before a final 1.39 GiB allocation failed on a 24 GB card. That means batch size 32 is close but unreliable on a 4090, especially with `torch.compile` enabled.
-
-Recommended defaults:
-
-```bash
-BATCH_SIZE=16
-COMPILE_MODEL=false
-```
-
-Use `RESUME=true` only when continuing from a valid checkpoint. If a run died before saving a checkpoint, remove or rename that experiment's `outputs/` directory before retrying.
-
 ## Notes
 
 `train.sh` unsets the deprecated `LEROBOT_HOME` variable and uses `HF_LEROBOT_HOME` instead.
